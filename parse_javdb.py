@@ -374,6 +374,10 @@ def commit_and_push():
     """Коммитит и пушит изменения"""
     import subprocess
     try:
+        # Настраиваем git (надо для первого коммита в раннере)
+        subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], check=True)
+        subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], check=True)
+        
         subprocess.run(['git', 'add', 'data/', 'metadata.json', 'sitemap_cache.json'], check=True)
         result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
         if result.returncode != 0:
