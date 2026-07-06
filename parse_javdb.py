@@ -4,7 +4,6 @@ import xml.etree.ElementTree as ET
 import json
 import time
 import os
-import base64
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone
 import logging
@@ -32,7 +31,7 @@ TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'
 TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))
 TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))
 
-# Ключ из GitHub Secrets (с fallback для локальной разработки)
+# Ключ из GitHub Secrets
 XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
 
 USER_AGENTS = [
@@ -128,6 +127,16 @@ def get_sitemap_urls():
     movie_sitemaps = [s for s in sitemaps if 'movies-sitemap' in s['loc']]
     logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
     
+    # Загрузка кэша
+    cache = {}
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            logger.info(f"Кэш загружен: {len(cache)} sitemap'ов")
+        except:
+            pass
+    
     if TEST_MODE:
         movie_sitemaps = movie_sitemaps[:TEST_SITEMAP_LIMIT]
         logger.info(f"ТЕСТ: обрабатываем {len(movie_sitemaps)} sitemap(ов)")
@@ -136,7 +145,13 @@ def get_sitemap_urls():
     
     for i, sitemap_data in enumerate(movie_sitemaps, 1):
         loc = sitemap_data['loc']
-        logger.info(f"[{i}/{len(movie_sitemaps)}] {loc}")
+        
+        # Проверяем кэш
+        if loc in cache:
+            logger.info(f"[{i}/{len(movie_sitemaps)}] Пропуск (в кэше): {loc}")
+            continue
+        
+        logger.info(f"[{i}/{len(movie_sitemaps)}] Обработка: {loc}")
         
         time.sleep(random.uniform(1, 2))
         resp = fetch_with_retry(scraper, loc)
@@ -157,6 +172,8 @@ def get_sitemap_urls():
                         if TEST_MODE and len(all_film_paths) >= TEST_FILM_LIMIT:
                             break
             
+            # Сохраняем в кэш
+            cache[loc] = datetime.now(timezone.utc).isoformat()
             logger.info(f"  -> URL: {len(all_film_paths)}")
             
             if TEST_MODE and len(all_film_paths) >= TEST_FILM_LIMIT:
@@ -164,6 +181,11 @@ def get_sitemap_urls():
                 
         except Exception as e:
             logger.error(f"Ошибка: {e}")
+    
+    # Сохраняем кэш
+    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=2)
+    logger.info(f"Кэш сохранен: {len(cache)} sitemap'ов")
     
     if TEST_MODE:
         all_film_paths = all_film_paths[:TEST_FILM_LIMIT]
@@ -376,15 +398,10 @@ def main():
     total = len(existing_codes) + len(new_films)
     metadata = {
         "lastUpdate": datetime.now(timezone.utc).isoformat(),
-        "totalFilms": total,
-        "newFilms": len(new_films)
+        "totalFilms": total
     }
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
-    
-    # Кэш sitemap
-    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-        json.dump({"lastRun": datetime.now(timezone.utc).isoformat()}, f)
     
     logger.info(f"Готово! Новых: {len(new_films)}, всего: {total}")
     logger.info(f"Время: {(time.time()-start_time)/60:.1f} мин")
