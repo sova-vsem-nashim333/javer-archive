@@ -31,21 +31,24 @@ jobs:
       - name: Run parser
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
-          TEST_MODE: '${{ github.event.inputs.test_mode || github.event_name == ''workflow_dispatch'' && ''true'' || ''false'' }}'
+          TEST_MODE: '${{ github.event.inputs.test_mode || ''true'' }}'
         run: python parse_javdb.py
         timeout-minutes: 360
-        
-      - name: Upload results (test)
+          
+      - name: Upload test results
         if: github.event.inputs.test_mode == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: parsed_films.json
+          path: |
+            data/*.json
+            metadata.json
+          retention-days: 7
           
-      - name: Commit (production)
+      - name: Commit and push
         if: github.event.inputs.test_mode != 'true'
         run: |
           git config --local user.email "actions@github.com"
           git config --local user.name "GitHub Actions"
-          git add parsed_films.enc sitemap_cache.json
+          git add data/*.bin metadata.json sitemap_cache.json
           git diff --staged --quiet || (git commit -m "Update $(date +'%Y-%m-%d')" && git push)
