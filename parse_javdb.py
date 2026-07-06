@@ -26,12 +26,10 @@ CACHE_FILE = "sitemap_cache.json"
 DATA_DIR = "data"
 METADATA_FILE = "metadata.json"
 
-# Тестовый режим
 TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'
 TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))
 TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))
 
-# Ключ из GitHub Secrets
 XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
 
 USER_AGENTS = [
@@ -103,97 +101,51 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
     
     return None
 
-# --- Sitemap ---
+# --- Загрузка существующих кодов ---
 
-def get_sitemap_urls():
-    scraper = create_scraper()
-    
-    logger.info(f"Загрузка sitemap-индекса: {SITEMAP_INDEX_URL}")
-    
-    resp = fetch_with_retry(scraper, SITEMAP_INDEX_URL)
-    if not resp:
-        logger.error("Не удалось получить sitemap index")
-        return []
-    
-    root = ET.fromstring(resp.content)
-    ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-    sitemaps = []
-    
-    for sitemap in root.findall('sm:sitemap', ns):
-        loc_elem = sitemap.find('sm:loc', ns)
-        if loc_elem is not None:
-            sitemaps.append({'loc': loc_elem.text})
+def load_existing_codes(key):
+    """Загружает коды всех уже спаршенных фильмов"""
+    codes = set()
+    if os.path.exists(DATA_DIR):
+        for f in os.listdir(DATA_DIR):
+            if f.endswith('.bin'):
+                data = load_encrypted(os.path.join(DATA_DIR, f), key)
+                if data:
+                    for film in data.get('films', []):
+                        codes.add(film['code'])
+    return codes
 
-    movie_sitemaps = [s for s in sitemaps if 'movies-sitemap' in s['loc']]
-    logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
-    
-    # Загрузка кэша
-    cache = {}
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-            logger.info(f"Кэш загружен: {len(cache)} sitemap'ов")
-        except:
-            pass
-    
-    if TEST_MODE:
-        movie_sitemaps = movie_sitemaps[:TEST_SITEMAP_LIMIT]
-        logger.info(f"ТЕСТ: обрабатываем {len(movie_sitemaps)} sitemap(ов)")
-    
-    all_film_paths = []
-    
-    for i, sitemap_data in enumerate(movie_sitemaps, 1):
-        loc = sitemap_data['loc']
-        
-        # Проверяем кэш
-        if loc in cache:
-            logger.info(f"[{i}/{len(movie_sitemaps)}] Пропуск (в кэше): {loc}")
-            continue
-        
-        logger.info(f"[{i}/{len(movie_sitemaps)}] Обработка: {loc}")
-        
-        time.sleep(random.uniform(1, 2))
-        resp = fetch_with_retry(scraper, loc)
-        
-        if not resp:
-            continue
-        
-        try:
-            sitemap_root = ET.fromstring(resp.content)
-            
-            for url in sitemap_root.findall('sm:url', ns):
-                film_loc_elem = url.find('sm:loc', ns)
-                if film_loc_elem is not None:
-                    parsed_url = urlparse(film_loc_elem.text)
-                    if '/movies/' in parsed_url.path:
-                        all_film_paths.append(parsed_url.path)
-                        
-                        if TEST_MODE and len(all_film_paths) >= TEST_FILM_LIMIT:
-                            break
-            
-            # Сохраняем в кэш
-            cache[loc] = datetime.now(timezone.utc).isoformat()
-            logger.info(f"  -> URL: {len(all_film_paths)}")
-            
-            if TEST_MODE and len(all_film_paths) >= TEST_FILM_LIMIT:
-                break
-                
-        except Exception as e:
-            logger.error(f"Ошибка: {e}")
-    
-    # Сохраняем кэш
-    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(cache, f, indent=2)
-    logger.info(f"Кэш сохранен: {len(cache)} sitemap'ов")
-    
-    if TEST_MODE:
-        all_film_paths = all_film_paths[:TEST_FILM_LIMIT]
-    
-    logger.info(f"Итого URL: {len(all_film_paths)}")
-    return all_film_paths
+# --- Сохранение одного месяца ---
 
-# --- Парсинг фильма ---
+def save_month(month, new_films, key):
+    """Добавляет новые фильмы в файл месяца"""
+    filepath = os.path.join(DATA_DIR, f"{month}.bin")
+    
+    existing = load_encrypted(filepath, key)
+    existing_films = existing.get('films', []) if existing else []
+    
+    codes = {f['code'] for f in existing_films}
+    really_new = [f for f in new_films if f['code'] not in codes]
+    
+    if not really_new:
+        return 0
+    
+    all_films = existing_films + really_new
+    
+    data = {
+        "films": all_films,
+        "metadata": {
+            "version": "1.0.0",
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "month": month,
+            "totalFilms": len(all_films)
+        }
+    }
+    
+    save_encrypted(data, filepath, key)
+    return len(really_new)
+
+# --- Парсинг одного фильма ---
 
 def parse_film_page(scraper, url_path):
     full_url = urljoin(BASE_URL, url_path)
@@ -291,100 +243,149 @@ def parse_film_page(scraper, url_path):
 
     return film_data
 
-# --- Сохранение ---
+# --- Парсинг одного sitemap + сразу парсинг фильмов ---
 
-def save_films_by_month(films, key):
-    films_by_month = defaultdict(list)
+def process_sitemap(scraper, sitemap_url, existing_codes, key, cache):
+    """Парсит один sitemap, сразу парсит фильмы и сохраняет"""
     
-    for film in films:
-        if film.get('releaseDate'):
-            month_key = film['releaseDate'][:7]
-            films_by_month[month_key].append(film)
+    # Проверяем кэш
+    if sitemap_url in cache:
+        logger.info(f"  Пропуск (в кэше): {sitemap_url}")
+        return 0
     
-    for month, month_films in films_by_month.items():
-        filepath = os.path.join(DATA_DIR, f"{month}.bin")
+    logger.info(f"  Загрузка sitemap: {sitemap_url}")
+    
+    time.sleep(random.uniform(1, 2))
+    resp = fetch_with_retry(scraper, sitemap_url)
+    
+    if not resp:
+        return 0
+    
+    try:
+        root = ET.fromstring(resp.content)
+        ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
         
-        existing = load_encrypted(filepath, key)
-        existing_films = existing.get('films', []) if existing else []
+        # Собираем URL из этого sitemap
+        urls = []
+        for url in root.findall('sm:url', ns):
+            loc = url.find('sm:loc', ns)
+            if loc is not None:
+                parsed = urlparse(loc.text)
+                if '/movies/' in parsed.path:
+                    code = parsed.path.strip('/').split('/')[-1].upper()
+                    if code not in existing_codes:
+                        urls.append(parsed.path)
         
-        codes = {f['code'] for f in existing_films}
-        new = [f for f in month_films if f['code'] not in codes]
-        all_films = existing_films + new
+        logger.info(f"  Найдено новых URL: {len(urls)}")
         
-        data = {
-            "films": all_films,
-            "metadata": {
-                "version": "1.0.0",
-                "generatedAt": datetime.now(timezone.utc).isoformat(),
-                "month": month,
-                "totalFilms": len(all_films)
-            }
-        }
+        if not urls:
+            cache[sitemap_url] = datetime.now(timezone.utc).isoformat()
+            return 0
         
-        save_encrypted(data, filepath, key)
-        logger.info(f"  💾 {month}.bin: {len(all_films)} фильмов (+{len(new)} новых)")
+        # Сразу парсим фильмы
+        parsed_count = 0
+        films_by_month = defaultdict(list)
+        
+        for i, path in enumerate(urls, 1):
+            logger.info(f"    [{i}/{len(urls)}] {path}")
+            
+            film = parse_film_page(scraper, path)
+            
+            if film:
+                month = film['releaseDate'][:7]
+                films_by_month[month].append(film)
+                existing_codes.add(film['code'])
+                parsed_count += 1
+                logger.info(f"    ✓ {film['code']}: {film['title'][:50]}")
+            else:
+                logger.warning(f"    ✗ Ошибка")
+            
+            time.sleep(random.uniform(1.5, 3))
+        
+        # Сохраняем всё что напарсили из этого sitemap
+        total_saved = 0
+        for month, films in films_by_month.items():
+            saved = save_month(month, films, key)
+            total_saved += saved
+            if saved > 0:
+                logger.info(f"  💾 {month}.bin: +{saved} фильмов")
+        
+        # Кэшируем sitemap
+        cache[sitemap_url] = datetime.now(timezone.utc).isoformat()
+        
+        # Сохраняем кэш после каждого sitemap
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cache, f, indent=2)
+        
+        return parsed_count
+        
+    except Exception as e:
+        logger.error(f"  Ошибка обработки sitemap: {e}")
+        return 0
 
 # --- Главная ---
 
 def main():
     start_time = time.time()
     logger.info("="*60)
-    logger.info("Парсер JAVDatabase")
+    logger.info("Парсер JAVDatabase (потоковая обработка)")
     if TEST_MODE:
         logger.info(f"ТЕСТ: {TEST_SITEMAP_LIMIT} sitemap, {TEST_FILM_LIMIT} фильмов")
     logger.info("="*60)
     
-    film_paths = get_sitemap_urls()
+    scraper = create_scraper()
     
-    if not film_paths:
-        logger.warning("Нет URL")
+    # Загружаем sitemap index
+    logger.info(f"Загрузка sitemap-индекса: {SITEMAP_INDEX_URL}")
+    resp = fetch_with_retry(scraper, SITEMAP_INDEX_URL)
+    if not resp:
+        logger.error("Не удалось получить sitemap index")
         return
+    
+    root = ET.fromstring(resp.content)
+    ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+    
+    movie_sitemaps = []
+    for sitemap in root.findall('sm:sitemap', ns):
+        loc = sitemap.find('sm:loc', ns)
+        if loc is not None and 'movies-sitemap' in loc.text:
+            movie_sitemaps.append(loc.text)
+    
+    logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
+    
+    # Загружаем кэш
+    cache = {}
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            logger.info(f"Кэш загружен: {len(cache)} sitemap'ов")
+        except:
+            pass
     
     # Загружаем существующие коды
-    existing_codes = set()
-    if os.path.exists(DATA_DIR):
-        for f in os.listdir(DATA_DIR):
-            if f.endswith('.bin'):
-                data = load_encrypted(os.path.join(DATA_DIR, f), XOR_KEY)
-                if data:
-                    for film in data.get('films', []):
-                        existing_codes.add(film['code'])
+    existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
     
-    # Новые
-    new_paths = []
-    for path in film_paths:
-        code = path.strip('/').split('/')[-1].upper()
-        if code not in existing_codes:
-            new_paths.append(path)
+    # Ограничение для теста
+    if TEST_MODE:
+        movie_sitemaps = movie_sitemaps[:TEST_SITEMAP_LIMIT]
+        logger.info(f"ТЕСТ: {len(movie_sitemaps)} sitemap(ов)")
     
-    logger.info(f"Новых: {len(new_paths)}")
-    
-    if not new_paths:
-        logger.info("Нет новых фильмов")
-        return
-    
-    # Парсим
-    scraper = create_scraper()
-    new_films = []
-    
-    for i, path in enumerate(new_paths, 1):
-        logger.info(f"[{i}/{len(new_paths)}] {path}")
+    # Обрабатываем sitemap'ы один за другим
+    total_parsed = 0
+    for i, sitemap_url in enumerate(movie_sitemaps, 1):
+        logger.info(f"[{i}/{len(movie_sitemaps)}]")
         
-        film = parse_film_page(scraper, path)
+        parsed = process_sitemap(scraper, sitemap_url, existing_codes, XOR_KEY, cache)
+        total_parsed += parsed
         
-        if film:
-            new_films.append(film)
-            logger.info(f"  ✓ {film['code']}: {film['title'][:60]}")
-        else:
-            logger.warning(f"  ✗ Ошибка")
-        
-        time.sleep(random.uniform(1.5, 3))
+        # В тесте ограничиваем количество фильмов
+        if TEST_MODE and total_parsed >= TEST_FILM_LIMIT:
+            logger.info(f"Достигнут лимит теста: {TEST_FILM_LIMIT} фильмов")
+            break
     
-    # Сохраняем
-    save_films_by_month(new_films, XOR_KEY)
-    
-    # В тестовом режиме сохраняем читаемые копии
+    # Тестовые JSON
     if TEST_MODE:
         for f in os.listdir(DATA_DIR):
             if f.endswith('.bin'):
@@ -392,10 +393,9 @@ def main():
                 json_path = os.path.join(DATA_DIR, f.replace('.bin', '.json'))
                 with open(json_path, 'w', encoding='utf-8') as fp:
                     json.dump(data, fp, ensure_ascii=False, indent=2)
-                logger.info(f"  📄 Тестовый JSON: {json_path}")
     
     # Метаданные
-    total = len(existing_codes) + len(new_films)
+    total = len(existing_codes)
     metadata = {
         "lastUpdate": datetime.now(timezone.utc).isoformat(),
         "totalFilms": total
@@ -403,8 +403,10 @@ def main():
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
     
-    logger.info(f"Готово! Новых: {len(new_films)}, всего: {total}")
+    logger.info("="*60)
+    logger.info(f"Готово! Всего фильмов: {total}")
     logger.info(f"Время: {(time.time()-start_time)/60:.1f} мин")
+    logger.info("="*60)
 
 if __name__ == "__main__":
     main()
