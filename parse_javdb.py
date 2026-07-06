@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import logging
 import sys
 import random
+from collections import defaultdict
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -23,16 +24,16 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.javdatabase.com"
 SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 CACHE_FILE = "sitemap_cache.json"
-OUTPUT_FILE = "parsed_films.json"
-ENCRYPTED_FILE = "parsed_films.enc"
+DATA_DIR = "data"
+METADATA_FILE = "metadata.json"
 
 # Тестовый режим
 TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'
-TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))  # Сколько sitemap'ов парсить
-TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))  # Сколько фильмов парсить
+TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))
+TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))
 
-# Ключ для XOR шифрования
-XOR_KEY = os.environ.get('XOR_KEY', '299af363382d01e6ad36ddca7fa39ca92ee1627efe733dc6')
+# Ключ из GitHub Secrets (с fallback для локальной разработки)
+XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
@@ -42,7 +43,7 @@ USER_AGENTS = [
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 2
 
-# --- Функции шифрования ---
+# --- Шифрование ---
 
 def xor_encrypt_decrypt(data: bytes, key: str) -> bytes:
     key_bytes = key.encode('utf-8')
@@ -51,20 +52,21 @@ def xor_encrypt_decrypt(data: bytes, key: str) -> bytes:
         result[i] = data[i] ^ key_bytes[i % len(key_bytes)]
     return bytes(result)
 
-def save_encrypted_json(data: dict, filepath: str, key: str):
+def save_encrypted(data: dict, filepath: str, key: str):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
     json_str = json.dumps(data, ensure_ascii=False, indent=2)
     encrypted = xor_encrypt_decrypt(json_str.encode('utf-8'), key)
     with open(filepath, 'wb') as f:
         f.write(base64.b64encode(encrypted))
 
-def load_encrypted_json(filepath: str, key: str) -> dict:
+def load_encrypted(filepath: str, key: str) -> dict:
     if not os.path.exists(filepath):
         return None
     with open(filepath, 'rb') as f:
         encrypted = base64.b64decode(f.read())
     return json.loads(xor_encrypt_decrypt(encrypted, key).decode('utf-8'))
 
-# --- Основные функции ---
+# --- Scraper ---
 
 def create_scraper():
     scraper = cloudscraper.create_scraper(
@@ -88,7 +90,6 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
             response = scraper.get(url, timeout=REQUEST_TIMEOUT)
             
             if response.status_code == 200:
-                # Фикс кодировки
                 if response.encoding == 'ISO-8859-1':
                     response.encoding = 'utf-8'
                 return response
@@ -96,14 +97,15 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
                 if attempt < max_retries - 1:
                     time.sleep(random.uniform(5, 10))
                     
-        except Exception as e:
+        except Exception:
             if attempt < max_retries - 1:
                 time.sleep(random.uniform(1, 3))
     
     return None
 
+# --- Sitemap ---
+
 def get_sitemap_urls():
-    """Парсинг Sitemap с ограничением в тестовом режиме"""
     scraper = create_scraper()
     
     logger.info(f"Загрузка sitemap-индекса: {SITEMAP_INDEX_URL}")
@@ -122,14 +124,12 @@ def get_sitemap_urls():
         if loc_elem is not None:
             sitemaps.append({'loc': loc_elem.text})
 
-    # Фильтруем только movies-sitemap
     movie_sitemaps = [s for s in sitemaps if 'movies-sitemap' in s['loc']]
     logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
     
-    # В тестовом режиме ограничиваем количество
     if TEST_MODE:
         movie_sitemaps = movie_sitemaps[:TEST_SITEMAP_LIMIT]
-        logger.info(f"ТЕСТ: обрабатываем только {len(movie_sitemaps)} sitemap(ов)")
+        logger.info(f"ТЕСТ: обрабатываем {len(movie_sitemaps)} sitemap(ов)")
     
     all_film_paths = []
     
@@ -153,11 +153,10 @@ def get_sitemap_urls():
                     if '/movies/' in parsed_url.path:
                         all_film_paths.append(parsed_url.path)
                         
-                        # В тестовом режиме останавливаемся при достижении лимита
                         if TEST_MODE and len(all_film_paths) >= TEST_FILM_LIMIT:
                             break
             
-            logger.info(f"  -> Получено URL: {len(all_film_paths)}")
+            logger.info(f"  -> URL: {len(all_film_paths)}")
             
             if TEST_MODE and len(all_film_paths) >= TEST_FILM_LIMIT:
                 break
@@ -168,25 +167,25 @@ def get_sitemap_urls():
     if TEST_MODE:
         all_film_paths = all_film_paths[:TEST_FILM_LIMIT]
     
-    logger.info(f"Итого URL для парсинга: {len(all_film_paths)}")
+    logger.info(f"Итого URL: {len(all_film_paths)}")
     return all_film_paths
 
+# --- Парсинг фильма ---
+
 def parse_film_page(scraper, url_path):
-    """Парсинг страницы фильма"""
     full_url = urljoin(BASE_URL, url_path)
     
     resp = fetch_with_retry(scraper, full_url)
     if not resp:
         return None
     
-    # Фикс кодировки
     if resp.encoding == 'ISO-8859-1':
         resp.encoding = 'utf-8'
     
     soup = BeautifulSoup(resp.text, 'html.parser')
     film_data = {}
     
-    # Код фильма
+    # Код
     path_parts = url_path.strip('/').split('/')
     if len(path_parts) >= 2 and path_parts[-2] == 'movies':
         film_data['code'] = path_parts[-1].upper()
@@ -253,21 +252,56 @@ def parse_film_page(scraper, url_path):
         'actress': actresses[:10]
     }
 
-    # Дата
-    date_added = None
+    # Дата релиза
+    release_date = None
     if movie_table:
         for row in movie_table.find_all(['p', 'div']):
             text = row.get_text(strip=True)
             if 'Release Date:' in text:
                 date_str = text.split('Release Date:')[-1].strip()
                 try:
-                    dt = datetime.strptime(date_str, '%Y-%m-%d')
-                    date_added = dt.replace(tzinfo=timezone.utc).isoformat()
+                    datetime.strptime(date_str, '%Y-%m-%d')
+                    release_date = date_str
                 except:
                     pass
-    film_data['dateAdded'] = date_added or datetime.now(timezone.utc).isoformat()
+    film_data['releaseDate'] = release_date or datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
     return film_data
+
+# --- Сохранение ---
+
+def save_films_by_month(films, key):
+    films_by_month = defaultdict(list)
+    
+    for film in films:
+        if film.get('releaseDate'):
+            month_key = film['releaseDate'][:7]
+            films_by_month[month_key].append(film)
+    
+    for month, month_films in films_by_month.items():
+        filepath = os.path.join(DATA_DIR, f"{month}.bin")
+        
+        existing = load_encrypted(filepath, key)
+        existing_films = existing.get('films', []) if existing else []
+        
+        codes = {f['code'] for f in existing_films}
+        new = [f for f in month_films if f['code'] not in codes]
+        all_films = existing_films + new
+        
+        data = {
+            "films": all_films,
+            "metadata": {
+                "version": "1.0.0",
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "month": month,
+                "totalFilms": len(all_films)
+            }
+        }
+        
+        save_encrypted(data, filepath, key)
+        logger.info(f"  💾 {month}.bin: {len(all_films)} фильмов (+{len(new)} новых)")
+
+# --- Главная ---
 
 def main():
     start_time = time.time()
@@ -277,20 +311,24 @@ def main():
         logger.info(f"ТЕСТ: {TEST_SITEMAP_LIMIT} sitemap, {TEST_FILM_LIMIT} фильмов")
     logger.info("="*60)
     
-    # Загружаем существующие
-    existing_data = load_encrypted_json(ENCRYPTED_FILE, XOR_KEY)
-    existing_films = existing_data.get('films', []) if existing_data else []
-    existing_codes = {f['code'] for f in existing_films}
-    logger.info(f"В базе: {len(existing_films)} фильмов")
-    
-    # Получаем URL
     film_paths = get_sitemap_urls()
     
     if not film_paths:
         logger.warning("Нет URL")
         return
     
-    # Фильтруем новые
+    # Загружаем существующие коды
+    existing_codes = set()
+    if os.path.exists(DATA_DIR):
+        for f in os.listdir(DATA_DIR):
+            if f.endswith('.bin'):
+                data = load_encrypted(os.path.join(DATA_DIR, f), XOR_KEY)
+                if data:
+                    for film in data.get('films', []):
+                        existing_codes.add(film['code'])
+    logger.info(f"В базе: {len(existing_codes)} фильмов")
+    
+    # Новые
     new_paths = []
     for path in film_paths:
         code = path.strip('/').split('/')[-1].upper()
@@ -315,35 +353,29 @@ def main():
         if film:
             new_films.append(film)
             logger.info(f"  ✓ {film['code']}: {film['title'][:60]}")
-            logger.info(f"    Жанры: {', '.join(film['metadata']['genre'][:3])}")
-            logger.info(f"    Актрисы: {', '.join(film['metadata']['actress'][:3])}")
-            logger.info(f"    Обложка: {film['thumbnail']}")
-            logger.info(f"    Скриншотов: {len(film['screenshots'])}")
         else:
             logger.warning(f"  ✗ Ошибка")
         
         time.sleep(random.uniform(1.5, 3))
     
     # Сохраняем
-    all_films = existing_films + new_films
-    output = {
-        "films": all_films,
-        "metadata": {
-            "version": "1.0.0",
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
-            "source": "javdatabase.com",
-            "totalFilms": len(all_films)
-        }
+    save_films_by_month(new_films, XOR_KEY)
+    
+    # Метаданные
+    total = len(existing_codes) + len(new_films)
+    metadata = {
+        "lastUpdate": datetime.now(timezone.utc).isoformat(),
+        "totalFilms": total,
+        "newFilms": len(new_films)
     }
+    with open(METADATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
     
-    save_encrypted_json(output, ENCRYPTED_FILE, XOR_KEY)
+    # Кэш sitemap
+    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        json.dump({"lastRun": datetime.now(timezone.utc).isoformat()}, f)
     
-    # В тесте сохраняем читаемый JSON
-    if TEST_MODE:
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            json.dump(output, f, ensure_ascii=False, indent=2)
-    
-    logger.info(f"Готово! Новых: {len(new_films)}, всего: {len(all_films)}")
+    logger.info(f"Готово! Новых: {len(new_films)}, всего: {total}")
     logger.info(f"Время: {(time.time()-start_time)/60:.1f} мин")
 
 if __name__ == "__main__":
