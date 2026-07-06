@@ -345,19 +345,43 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
                 except Exception as e:
                     logger.error(f"    ✗ {code}: {e}")
         
-        # Сохраняем
+        # Сохраняем файлы
         total_saved = save_month_batch(films_by_month, key)
         
+        # Обновляем кэш
         with cache_lock:
             cache[sitemap_url] = datetime.now(timezone.utc).isoformat()
             with open(CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache, f, indent=2)
+        
+        # Обновляем метаданные
+        with open(METADATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump({
+                "lastUpdate": datetime.now(timezone.utc).isoformat(),
+                "totalFilms": len(existing_codes)
+            }, f, ensure_ascii=False, indent=2)
+        
+        # КОММИТ ПОСЛЕ КАЖДОГО SITEMAP
+        commit_and_push()
         
         return parsed_count
         
     except Exception as e:
         logger.error(f"  Ошибка: {e}")
         return 0
+
+def commit_and_push():
+    """Коммитит и пушит изменения"""
+    import subprocess
+    try:
+        subprocess.run(['git', 'add', 'data/', 'metadata.json', 'sitemap_cache.json'], check=True)
+        result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
+        if result.returncode != 0:
+            subprocess.run(['git', 'commit', '-m', f'Update {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], check=True)
+            subprocess.run(['git', 'push'], check=True)
+            logger.info("  📤 Закоммичено и запушено")
+    except Exception as e:
+        logger.error(f"  Ошибка коммита: {e}")
 
 # --- Главная ---
 
