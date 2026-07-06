@@ -123,7 +123,7 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
         try:
             if attempt > 0:
                 scraper.headers.update({'User-Agent': random.choice(USER_AGENTS)})
-                time.sleep(random.uniform(2, 5))
+                time.sleep(random.uniform(0.5, 1.5))
             
             response = scraper.get(url, timeout=REQUEST_TIMEOUT)
             
@@ -195,7 +195,7 @@ def parse_film_page(url_path):
         scraper = get_scraper()
         try:
             full_url = urljoin(BASE_URL, url_path)
-            time.sleep(random.uniform(1.0, 3.0))
+            time.sleep(random.uniform(0.5, 1.5))
             
             resp = fetch_with_retry(scraper, full_url)
             if not resp:
