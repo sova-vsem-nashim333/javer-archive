@@ -2,31 +2,45 @@ name: JAV Database Parser
 
 on:
   schedule:
-    # Запуск каждый день в 0:00 UTC
-    - cron: '0 0 * * *'
-  workflow_dispatch: # Позволяет запускать вручную
+    - cron: '0 0 * * *'  # Каждый день в 3:00 UTC
+  workflow_dispatch:       # Ручной запуск
 
 jobs:
   parse:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0  # Важно для git push
+          
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
+          
       - name: Install dependencies
-        run: pip install requests beautifulsoup4 lxml
-
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml urllib3
+          
       - name: Run parser
         run: python parse_javdb.py
-
+        continue-on-error: true  # Продолжаем даже если парсер упал, чтобы сохранить что есть
+        
       - name: Commit and push results
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Добавляем только измененные файлы
           git add parsed_films.json sitemap_cache.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update film data $(date +'%Y-%m-%d')" && git push)
+          
+          # Проверяем есть ли изменения
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update film data $(date +'%Y-%m-%d')"
+            git push
+          fi
