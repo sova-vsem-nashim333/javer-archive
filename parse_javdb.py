@@ -32,7 +32,7 @@ METADATA_FILE = "metadata.json"
 TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'
 TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))
 TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))
-MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '4'))
+MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '2'))
 
 XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
 
@@ -219,17 +219,22 @@ def parse_film_page(url_path):
             desc = meta_desc['content'].strip()
         film_data['description'] = desc[:500]
 
-        # Обложка
+         # Обложка — сначала poster-container, потом og:image
         thumb = None
-        og_img = soup.find('meta', property='og:image')
-        if og_img and og_img.get('content'):
-            thumb = urlparse(og_img['content']).path
+        
+        # Способ 1: poster-container (самый надёжный)
+        poster = soup.find('div', id='poster-container')
+        if poster:
+            img = poster.find('img')
+            if img and img.get('src'):
+                thumb = urlparse(urljoin(BASE_URL, img['src'])).path
+        
+        # Способ 2: og:image (fallback)
         if not thumb:
-            poster = soup.find('div', id='poster-container')
-            if poster:
-                img = poster.find('img')
-                if img and img.get('src'):
-                    thumb = urlparse(urljoin(BASE_URL, img['src'])).path
+            og_img = soup.find('meta', property='og:image')
+            if og_img and og_img.get('content'):
+                thumb = urlparse(og_img['content']).path
+        
         film_data['thumbnail'] = thumb
 
         # Скриншоты
