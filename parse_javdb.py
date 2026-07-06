@@ -361,6 +361,16 @@ def main():
     # Сохраняем
     save_films_by_month(new_films, XOR_KEY)
     
+    # В тестовом режиме сохраняем читаемые копии
+    if TEST_MODE:
+        for f in os.listdir(DATA_DIR):
+            if f.endswith('.bin'):
+                data = load_encrypted(os.path.join(DATA_DIR, f), XOR_KEY)
+                json_path = os.path.join(DATA_DIR, f.replace('.bin', '.json'))
+                with open(json_path, 'w', encoding='utf-8') as fp:
+                    json.dump(data, fp, ensure_ascii=False, indent=2)
+                logger.info(f"  📄 Тестовый JSON: {json_path}")
+    
     # Метаданные
     total = len(existing_codes) + len(new_films)
     metadata = {
