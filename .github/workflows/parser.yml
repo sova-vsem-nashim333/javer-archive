@@ -2,7 +2,7 @@ name: JAV Database Parser
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Каждый день в 3:00 UTC
+    - cron: '0 0 * * *'  # Каждый день в 00:00 UTC
   workflow_dispatch:       # Ручной запуск
 
 jobs:
@@ -23,11 +23,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml urllib3
+          pip install cloudscraper beautifulsoup4 lxml
           
       - name: Run parser
         run: python parse_javdb.py
         continue-on-error: true  # Продолжаем даже если парсер упал, чтобы сохранить что есть
+        timeout-minutes: 360  # Максимальное время выполнения 6 часов
         
       - name: Commit and push results
         run: |
@@ -44,3 +45,13 @@ jobs:
             git commit -m "Auto-update film data $(date +'%Y-%m-%d')"
             git push
           fi
+          
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-logs
+          path: |
+            parsed_films.json
+            sitemap_cache.json
+          retention-days: 7
