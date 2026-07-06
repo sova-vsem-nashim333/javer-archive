@@ -316,7 +316,7 @@ def main():
             new_films.append(film)
             logger.info(f"  ✓ {film['code']}: {film['title'][:60]}")
             logger.info(f"    Жанры: {', '.join(film['metadata']['genre'][:3])}")
-            logger.info(f    Актрисы: {', '.join(film['metadata']['actress'][:3])}")
+            logger.info(f"    Актрисы: {', '.join(film['metadata']['actress'][:3])}")
             logger.info(f"    Обложка: {film['thumbnail']}")
             logger.info(f"    Скриншотов: {len(film['screenshots'])}")
         else:
