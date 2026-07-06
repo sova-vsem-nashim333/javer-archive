@@ -3,17 +3,63 @@ name: JAV Database Parser
 on:
   schedule:
     - cron: '0 0 * * *'  # Каждый день в 00:00 UTC
-  workflow_dispatch:       # Ручной запуск
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: 'Тестовый режим (только 5 фильмов)'
+        type: boolean
+        default: false
+      test_limit:
+        description: 'Количество фильмов в тестовом режиме'
+        type: string
+        default: '5'
 
 jobs:
+  # Тестовый прогон
+  test:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.test_mode == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install cloudscraper beautifulsoup4 lxml
+          
+      - name: Run parser (TEST MODE)
+        env:
+          XOR_KEY: ${{ secrets.XOR_KEY }}
+          TEST_MODE: 'true'
+          TEST_LIMIT: ${{ github.event.inputs.test_limit || '5' }}
+        run: python parse_javdb.py
+        
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-parsed-films
+          path: parsed_films.json
+          retention-days: 1
+  
+  # Основной прогон
   parse:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.test_mode != 'true')
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Важно для git push
+          fetch-depth: 0
           
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -26,32 +72,20 @@ jobs:
           pip install cloudscraper beautifulsoup4 lxml
           
       - name: Run parser
+        env:
+          XOR_KEY: ${{ secrets.XOR_KEY }}
         run: python parse_javdb.py
-        continue-on-error: true  # Продолжаем даже если парсер упал, чтобы сохранить что есть
-        timeout-minutes: 360  # Максимальное время выполнения 6 часов
+        continue-on-error: true
+        timeout-minutes: 360
         
       - name: Commit and push results
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
-          # Добавляем только измененные файлы
-          git add parsed_films.json sitemap_cache.json
-          
-          # Проверяем есть ли изменения
+          git add parsed_films.enc sitemap_cache.json
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "Auto-update film data $(date +'%Y-%m-%d')"
             git push
           fi
-          
-      - name: Upload artifacts on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-logs
-          path: |
-            parsed_films.json
-            sitemap_cache.json
-          retention-days: 7
