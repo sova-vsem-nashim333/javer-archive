@@ -6,13 +6,14 @@ import time
 import os
 import queue
 import subprocess
+import requests
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone
 import logging
 import sys
 import random
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from threading import Lock
 
 # --- Настройка логирования ---
@@ -34,7 +35,7 @@ TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'
 TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))
 TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '2'))
-POOL_SIZE = MAX_WORKERS + 2  # Пул чуть больше чем потоков
+POOL_SIZE = MAX_WORKERS + 2
 
 XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
 
@@ -46,8 +47,8 @@ USER_AGENTS = [
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
 ]
 
-REQUEST_TIMEOUT = 30
-MAX_RETRIES = 3
+REQUEST_TIMEOUT = 20
+MAX_RETRIES = 2
 
 # Блокировки
 existing_codes_lock = Lock()
@@ -55,8 +56,6 @@ cache_lock = Lock()
 
 # Пул scraper'ов
 scraper_pool = queue.Queue(maxsize=POOL_SIZE)
-scraper_count_lock = Lock()
-scraper_count = 0
 
 # --- Шифрование ---
 
@@ -82,28 +81,26 @@ def load_encrypted(filepath: str, key: str) -> dict:
     decrypted = xor_encrypt_decrypt(encrypted, key)
     return json.loads(decrypted.decode('utf-8'))
 
-# --- Scraper pool с пересозданием при сбоях ---
+# --- Scraper pool ---
 
 def create_scraper():
-    global scraper_count
     scraper = cloudscraper.create_scraper(
         browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True},
-        delay=10
+        delay=5
     )
+    scraper.timeout = REQUEST_TIMEOUT
     scraper.headers.update({
         'User-Agent': random.choice(USER_AGENTS),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
         'Connection': 'keep-alive',
     })
-    with scraper_count_lock:
-        scraper_count += 1
     return scraper
 
 def init_scraper_pool(size):
     for _ in range(size):
         scraper_pool.put(create_scraper())
-    logger.info(f"Пул scraper'ов: {size} соединений")
+    logger.info(f"Пул scraper'ов: {size}")
 
 def get_scraper():
     try:
@@ -116,14 +113,12 @@ def return_scraper(scraper):
     if scraper is None:
         return
     try:
-        # Проверяем что scraper живой
         if hasattr(scraper, 'get') and hasattr(scraper, 'headers'):
             scraper_pool.put_nowait(scraper)
     except queue.Full:
-        pass  # Пул полон, scraper лишний
+        pass
 
 def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
-    last_exception = None
     for attempt in range(max_retries):
         try:
             if attempt > 0:
@@ -141,15 +136,7 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
             elif response.status_code == 429:
                 time.sleep(random.uniform(10, 20))
                     
-        except (requests.exceptions.ConnectionError, 
-                requests.exceptions.ReadTimeout,
-                requests.exceptions.ChunkedEncodingError) as e:
-            last_exception = e
-            logger.warning(f"Соединение сдохло (попытка {attempt+1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(random.uniform(2, 5))
-        except Exception as e:
-            last_exception = e
+        except Exception:
             if attempt < max_retries - 1:
                 time.sleep(random.uniform(1, 3))
     
@@ -201,7 +188,7 @@ def save_month_batch(month_films_dict, key):
     
     return total
 
-# --- Парсинг фильма с повторными попытками ---
+# --- Парсинг фильма ---
 
 def parse_film_page(url_path):
     for attempt in range(MAX_RETRIES):
@@ -213,7 +200,7 @@ def parse_film_page(url_path):
             resp = fetch_with_retry(scraper, full_url)
             if not resp:
                 if attempt < MAX_RETRIES - 1:
-                    logger.warning(f"    Попытка {attempt+1} не удалась, пробую с новым scraper'ом")
+                    logger.warning(f"    Попытка {attempt+1} не удалась, новый scraper")
                     continue
                 return None
             
@@ -252,7 +239,7 @@ def parse_film_page(url_path):
                 desc = meta_desc['content'].strip()
             film_data['description'] = desc[:500]
 
-            # Обложка — сначала poster-container, потом og:image
+            # Обложка
             thumb = None
             poster = soup.find('div', id='poster-container')
             if poster:
@@ -310,7 +297,7 @@ def parse_film_page(url_path):
             return film_data
             
         except Exception as e:
-            logger.error(f"    Ошибка парсинга: {e}")
+            logger.error(f"    Ошибка: {e}")
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
@@ -368,7 +355,7 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
                 code = path.strip('/').split('/')[-1].upper()
                 
                 try:
-                    film = future.result()
+                    film = future.result(timeout=60)
                     
                     if film:
                         month = film['releaseDate'][:7]
@@ -382,20 +369,23 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
                     else:
                         logger.warning(f"    ✗ {code}")
                         
+                except FuturesTimeoutError:
+                    logger.error(f"    ⏰ Таймаут 60с: {code}")
+                    future.cancel()
                 except Exception as e:
                     logger.error(f"    ✗ {code}: {e}")
         
-        # Сохраняем файлы
+        # Сохраняем
         if films_by_month:
             save_month_batch(films_by_month, key)
         
-        # Обновляем кэш
+        # Кэш
         with cache_lock:
             cache[sitemap_url] = datetime.now(timezone.utc).isoformat()
             with open(CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache, f, indent=2)
         
-        # Обновляем метаданные
+        # Метаданные
         with open(METADATA_FILE, 'w', encoding='utf-8') as f:
             json.dump({
                 "lastUpdate": datetime.now(timezone.utc).isoformat(),
@@ -412,7 +402,6 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
         return 0
 
 def commit_and_push():
-    import subprocess
     try:
         subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], 
                       check=True, capture_output=True)
@@ -437,12 +426,11 @@ def commit_and_push():
 def main():
     start_time = time.time()
     logger.info("="*60)
-    logger.info(f"Парсер JAVDatabase (workers={MAX_WORKERS}, pool={POOL_SIZE})")
+    logger.info(f"Парсер JAVDatabase (workers={MAX_WORKERS}, timeout=60s)")
     if TEST_MODE:
         logger.info(f"ТЕСТ: {TEST_SITEMAP_LIMIT} sitemap, {TEST_FILM_LIMIT} фильмов")
     logger.info("="*60)
     
-    # Пул соединений
     init_scraper_pool(POOL_SIZE)
     
     scraper = get_scraper()
@@ -467,7 +455,6 @@ def main():
     
     logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
     
-    # Кэш
     cache = {}
     if os.path.exists(CACHE_FILE):
         try:
@@ -477,14 +464,12 @@ def main():
         except:
             pass
     
-    # Существующие коды
     existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
     
     if TEST_MODE:
         movie_sitemaps = movie_sitemaps[:TEST_SITEMAP_LIMIT]
     
-    # Обработка
     total_parsed = 0
     for i, sitemap_url in enumerate(movie_sitemaps, 1):
         logger.info(f"[{i}/{len(movie_sitemaps)}]")
@@ -495,7 +480,6 @@ def main():
         if TEST_MODE and total_parsed >= TEST_FILM_LIMIT:
             break
     
-    # Тестовые JSON
     if TEST_MODE:
         for f in os.listdir(DATA_DIR):
             if f.endswith('.bin'):
@@ -504,14 +488,12 @@ def main():
                 with open(json_path, 'w', encoding='utf-8') as fp:
                     json.dump(data, fp, ensure_ascii=False, indent=2)
     
-    # Финальные метаданные
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({
             "lastUpdate": datetime.now(timezone.utc).isoformat(),
             "totalFilms": len(existing_codes)
         }, f, ensure_ascii=False, indent=2)
     
-    # Финальный коммит
     commit_and_push()
     
     logger.info("="*60)
@@ -520,5 +502,4 @@ def main():
     logger.info("="*60)
 
 if __name__ == "__main__":
-    import requests
     main()
