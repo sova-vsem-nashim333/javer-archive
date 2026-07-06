@@ -1,4 +1,4 @@
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
 import json
@@ -8,8 +8,7 @@ from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone
 import logging
 import sys
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import random
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -25,123 +24,126 @@ SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 CACHE_FILE = "sitemap_cache.json"
 OUTPUT_FILE = "parsed_films.json"
 
-# Более реалистичные заголовки, имитирующие обычный браузер
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'no-cache',
-    'Pragma': 'no-cache',
-    'Sec-Ch-Ua': '"Not/A)Brand";v="99", "Google Chrome";v="126", "Chromium";v="126"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1',
-}
+# Разные User-Agent для ротации
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+]
 
-# Таймауты
-REQUEST_TIMEOUT = (30, 60)  # (connect, read)
-DELAY_BETWEEN_REQUESTS = 1.5  # Увеличим задержку
+REQUEST_TIMEOUT = 60  # увеличенный таймаут для cloudscraper
+DELAY_BETWEEN_REQUESTS = 2  # увеличенная задержка
+MAX_RETRIES = 3
 
-def create_session():
-    """Создает requests сессию с retry механизмом"""
-    session = requests.Session()
-    
-    # Настройка retry стратегии
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[403, 429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
+def create_scraper():
+    """Создает cloudscraper с случайным User-Agent"""
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        },
+        delay=10  # ждем пока cloudscraper решит challenge
     )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
     
-    # Устанавливаем заголовки по умолчанию
-    session.headers.update(HEADERS)
+    # Устанавливаем случайный User-Agent
+    scraper.headers.update({
+        'User-Agent': random.choice(USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    })
     
-    return session
+    return scraper
 
-def fetch_with_cookies(session, url):
-    """
-    Загружает URL с предварительным запросом главной страницы для получения cookies
-    """
-    try:
-        # Сначала заходим на главную страницу, чтобы получить cookies (как обычный браузер)
-        logger.info("Получение cookies с главной страницы...")
-        main_page = session.get(
-            BASE_URL,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True
-        )
-        logger.info(f"Главная страница: статус {main_page.status_code}")
-        
-        # Небольшая пауза как у реального пользователя
-        time.sleep(2)
-        
-        # Теперь запрашиваем целевой URL
-        logger.info(f"Запрос целевого URL: {url}")
-        response = session.get(
-            url,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True
-        )
-        response.raise_for_status()
-        return response
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка при запросе {url}: {e}")
-        raise
+def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
+    """Загружает URL с повторными попытками и разными User-Agent"""
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Попытка {attempt + 1}/{max_retries} для {url}")
+            
+            # Меняем User-Agent при повторных попытках
+            if attempt > 0:
+                scraper.headers.update({'User-Agent': random.choice(USER_AGENTS)})
+                time.sleep(random.uniform(3, 7))  # случайная задержка
+            
+            response = scraper.get(url, timeout=REQUEST_TIMEOUT)
+            
+            if response.status_code == 200:
+                return response
+            elif response.status_code == 403:
+                logger.warning(f"403 Forbidden на попытке {attempt + 1}")
+                if attempt < max_retries - 1:
+                    # Ждем подольше перед следующей попыткой
+                    wait_time = (attempt + 1) * 10
+                    logger.info(f"Ожидание {wait_time} секунд...")
+                    time.sleep(wait_time)
+                continue
+            else:
+                logger.warning(f"Статус {response.status_code} на попытке {attempt + 1}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка на попытке {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(random.uniform(5, 10))
+            continue
+    
+    logger.error(f"Не удалось загрузить {url} после {max_retries} попыток")
+    return None
 
 def get_sitemap_urls():
     """
-    Этап 1: Парсинг Sitemap.
-    Проверяет кэш и загружает только измененные sitemap-файлы.
-    Возвращает полный список URL-путей к фильмам (без домена).
+    Этап 1: Парсинг Sitemap с использованием cloudscraper
     """
-    session = create_session()
+    scraper = create_scraper()
     
     logger.info(f"Загрузка главного sitemap-индекса: {SITEMAP_INDEX_URL}")
     
-    try:
-        # Пробуем с cookies
-        resp = fetch_with_cookies(session, SITEMAP_INDEX_URL)
-    except Exception as e:
-        logger.warning(f"Первая попытка не удалась: {e}")
-        logger.info("Пробуем альтернативный подход...")
-        
-        # Альтернативный подход: прямой запрос без предварительного посещения
-        try:
-            resp = session.get(SITEMAP_INDEX_URL, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-        except Exception as e2:
-            logger.error(f"Все попытки получить sitemap не удались: {e2}")
-            # Возвращаем пути из кэша если есть
-            return get_cached_film_paths()
+    # Пробуем загрузить sitemap index
+    resp = fetch_with_retry(scraper, SITEMAP_INDEX_URL)
+    
+    if not resp:
+        logger.error("Не удалось получить sitemap index")
+        return get_cached_film_paths()
+    
+    logger.info(f"Sitemap index загружен успешно. Размер: {len(resp.content)} байт")
     
     # Парсим XML
-    root = ET.fromstring(resp.content)
+    try:
+        root = ET.fromstring(resp.content)
+    except ET.ParseError as e:
+        logger.error(f"Ошибка парсинга XML: {e}")
+        return get_cached_film_paths()
     
     ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
     sitemaps = []
+    
     for sitemap in root.findall('sm:sitemap', ns):
-        loc = sitemap.find('sm:loc', ns).text
-        lastmod = sitemap.find('sm:lastmod', ns).text if sitemap.find('sm:lastmod', ns) is not None else None
-        sitemaps.append({'loc': loc, 'lastmod': lastmod})
+        loc_elem = sitemap.find('sm:loc', ns)
+        lastmod_elem = sitemap.find('sm:lastmod', ns)
+        
+        if loc_elem is not None:
+            loc = loc_elem.text
+            lastmod = lastmod_elem.text if lastmod_elem is not None else None
+            sitemaps.append({'loc': loc, 'lastmod': lastmod})
 
-    logger.info(f"Найдено {len(sitemaps)} файлов sitemap в индексе.")
+    logger.info(f"Найдено {len(sitemaps)} файлов sitemap в индексе:")
+    for s in sitemaps:
+        logger.info(f"  - {s['loc']} (lastmod: {s['lastmod']})")
 
     # Загрузка кэша
     cache = {}
     if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-            cache = json.load(f)
-        logger.info(f"Кэш загружен. Записей: {len(cache)}")
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            logger.info(f"Кэш загружен. Записей: {len(cache)}")
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки кэша: {e}")
 
     all_film_paths = set()
     new_cache = {}
@@ -163,57 +165,82 @@ def get_sitemap_urls():
         
         logger.info(f"Обработка: {loc}")
         
-        # Загружаем и парсим дочерний sitemap
+        # Загружаем дочерний sitemap
+        time.sleep(random.uniform(3, 5))  # пауза между запросами sitemap
+        resp = fetch_with_retry(scraper, loc)
+        
+        if not resp:
+            logger.error(f"Не удалось загрузить {loc}")
+            continue
+        
         try:
-            time.sleep(1)  # Пауза между запросами sitemap
-            resp = session.get(loc, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
             sitemap_root = ET.fromstring(resp.content)
+            urls_found = 0
             
             for url in sitemap_root.findall('sm:url', ns):
-                film_loc = url.find('sm:loc', ns).text
-                parsed_url = urlparse(film_loc)
-                all_film_paths.add(parsed_url.path)
-
-            logger.info(f"  -> Найдено URL: {len(all_film_paths)} (всего)")
+                film_loc_elem = url.find('sm:loc', ns)
+                if film_loc_elem is not None:
+                    film_loc = film_loc_elem.text
+                    parsed_url = urlparse(film_loc)
+                    # Сохраняем только пути к фильмам
+                    if '/movies/' in parsed_url.path:
+                        all_film_paths.add(parsed_url.path)
+                        urls_found += 1
+            
+            logger.info(f"  -> Найдено URL фильмов: {urls_found} (всего уникальных: {len(all_film_paths)})")
+            
         except Exception as e:
             logger.error(f"Ошибка при обработке {loc}: {e}")
 
     # Сохраняем кэш
-    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(new_cache, f, indent=2)
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(new_cache, f, indent=2)
+        logger.info(f"Кэш обновлен.")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения кэша: {e}")
     
-    logger.info(f"Кэш обновлен. Всего URL для парсинга: {len(all_film_paths)}")
+    logger.info(f"Всего URL фильмов для парсинга: {len(all_film_paths)}")
     return list(all_film_paths)
 
 def get_cached_film_paths():
-    """Извлекает пути фильмов из существующего output файла"""
+    """Извлекает пути фильмов из существующего output файла или кэша"""
+    paths = []
+    
+    # Пробуем из output файла
     if os.path.exists(OUTPUT_FILE):
         try:
             with open(OUTPUT_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 paths = [f"/movies/{film['code'].lower()}/" for film in data.get('films', [])]
-                logger.info(f"Восстановлено {len(paths)} путей из существующего {OUTPUT_FILE}")
+                logger.info(f"Восстановлено {len(paths)} путей из {OUTPUT_FILE}")
                 return paths
         except Exception as e:
             logger.error(f"Ошибка чтения {OUTPUT_FILE}: {e}")
-    return []
+    
+    # Пробуем из кэша sitemap
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+                logger.info(f"Найдены sitemap в кэше: {list(cache.keys())}")
+        except Exception as e:
+            logger.error(f"Ошибка чтения кэша: {e}")
+    
+    return paths
 
-def parse_film_page(session, url_path):
+def parse_film_page(scraper, url_path):
     """
-    Этап 2: Парсинг страницы фильма.
+    Этап 2: Парсинг страницы фильма
     """
     full_url = urljoin(BASE_URL, url_path)
-    logger.info(f"Парсинг: {full_url}")
     
-    try:
-        resp = session.get(full_url, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.content, 'html.parser')
-    except Exception as e:
-        logger.error(f"Ошибка загрузки {full_url}: {e}")
+    resp = fetch_with_retry(scraper, full_url, max_retries=2)
+    
+    if not resp:
         return None
-
+    
+    soup = BeautifulSoup(resp.content, 'html.parser')
     film_data = {}
     
     # --- Код фильма из URL ---
@@ -221,7 +248,6 @@ def parse_film_page(session, url_path):
     if len(path_parts) >= 2 and path_parts[-2] == 'movies':
         film_data['code'] = path_parts[-1].upper()
     else:
-        logger.warning(f"Не удалось извлечь код из URL: {url_path}")
         return None
 
     # --- Название ---
@@ -240,27 +266,26 @@ def parse_film_page(session, url_path):
         film_data['description'] = ''
 
     # --- Обложка ---
-    thumbnail_img = soup.find('div', id='poster-container')
-    if thumbnail_img:
-        img_tag = thumbnail_img.find('img')
-        if img_tag and img_tag.get('src'):
-            thumbnail_url = urljoin(BASE_URL, img_tag['src'])
-            film_data['thumbnail'] = urlparse(thumbnail_url).path
-        else:
-            film_data['thumbnail'] = None
+    og_image = soup.find('meta', property='og:image')
+    if og_image and og_image.get('content'):
+        film_data['thumbnail'] = urlparse(og_image['content']).path
     else:
-        # Fallback на og:image
-        og_image = soup.find('meta', property='og:image')
-        if og_image:
-            film_data['thumbnail'] = urlparse(og_image['content']).path
+        # Ищем в poster-container
+        poster = soup.find('div', id='poster-container')
+        if poster:
+            img = poster.find('img')
+            if img and img.get('src'):
+                film_data['thumbnail'] = urlparse(urljoin(BASE_URL, img['src'])).path
+            else:
+                film_data['thumbnail'] = None
         else:
             film_data['thumbnail'] = None
 
     # --- Скриншоты ---
     screenshots = []
-    gallery_div = soup.find('div', class_='image-gallery-section')
-    if gallery_div:
-        for a_tag in gallery_div.find_all('a', attrs={'data-image-src': True}):
+    gallery = soup.find('div', class_='image-gallery-section')
+    if gallery:
+        for a_tag in gallery.find_all('a', attrs={'data-image-src': True}):
             img_url = a_tag['data-image-src']
             screenshots.append(urlparse(img_url).path)
     film_data['screenshots'] = screenshots
@@ -309,39 +334,59 @@ def parse_film_page(session, url_path):
 
 def main():
     start_time = time.time()
-    logger.info("Запуск парсера JAVDatabase.")
-    
-    # Создаем сессию
-    session = create_session()
+    logger.info("="*60)
+    logger.info("Запуск парсера JAVDatabase")
+    logger.info("="*60)
     
     # Этап 1: Получаем список путей
     film_paths = get_sitemap_urls()
     
     if not film_paths:
-        logger.warning("Не удалось получить пути фильмов. Завершение.")
+        logger.warning("Не удалось получить пути фильмов.")
+        logger.info("Проверьте, существует ли файл parsed_films.json с предыдущими данными")
         return
     
-    # Для теста можно ограничить количество
-    # film_paths = film_paths[:10]
+    logger.info(f"Получено {len(film_paths)} путей фильмов для обработки")
+    
+    # Создаем новый scraper для парсинга страниц
+    scraper = create_scraper()
     
     # Этап 2: Парсим страницы
     parsed_films = []
     total = len(film_paths)
     
     for i, path in enumerate(film_paths, 1):
-        logger.info(f"Обработка {i}/{total}: {path}")
-        film_data = parse_film_page(session, path)
+        if i % 10 == 0:
+            logger.info(f"Прогресс: {i}/{total} ({i/total*100:.1f}%)")
+        
+        film_data = parse_film_page(scraper, path)
         if film_data:
             parsed_films.append(film_data)
+            logger.info(f"  ✓ {film_data['code']}: {film_data['title'][:50]}...")
+        else:
+            logger.warning(f"  ✗ Не удалось спарсить: {path}")
         
-        # Задержка между запросами
-        time.sleep(DELAY_BETWEEN_REQUESTS)
+        # Случайная задержка
+        time.sleep(random.uniform(1.5, 3))
         
-        # Логируем прогресс каждые 100 фильмов
-        if i % 100 == 0:
-            logger.info(f"Прогресс: {i}/{total} ({i/total*100:.1f}%)")
+        # Сохраняем промежуточные результаты каждые 50 фильмов
+        if i % 50 == 0:
+            output_data = {
+                "films": parsed_films,
+                "metadata": {
+                    "version": "1.0.0",
+                    "generatedAt": datetime.now(timezone.utc).isoformat(),
+                    "source": "javdatabase.com"
+                }
+            }
+            try:
+                with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(output_data, f, ensure_ascii=False, indent=2)
+                logger.info(f"Промежуточное сохранение: {len(parsed_films)} фильмов")
+            except Exception as e:
+                logger.error(f"Ошибка сохранения: {e}")
     
-    # Формируем итоговый JSON
+    # Финальное сохранение
     output_data = {
         "films": parsed_films,
         "metadata": {
@@ -351,13 +396,16 @@ def main():
         }
     }
     
-    # Сохраняем
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, ensure_ascii=False, indent=2)
     
     elapsed_time = time.time() - start_time
-    logger.info(f"Парсинг завершен. Фильмов: {len(parsed_films)}. Время: {elapsed_time:.2f} сек.")
-    logger.info(f"Результат сохранен в {OUTPUT_FILE}")
+    logger.info("="*60)
+    logger.info(f"Парсинг завершен!")
+    logger.info(f"Обработано фильмов: {len(parsed_films)}/{total}")
+    logger.info(f"Время выполнения: {elapsed_time/60:.1f} минут")
+    logger.info(f"Результат сохранен в: {OUTPUT_FILE}")
+    logger.info("="*60)
 
 if __name__ == "__main__":
     main()
