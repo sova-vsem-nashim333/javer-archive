@@ -57,14 +57,15 @@ def save_encrypted(data: dict, filepath: str, key: str):
     json_str = json.dumps(data, ensure_ascii=False, indent=2)
     encrypted = xor_encrypt_decrypt(json_str.encode('utf-8'), key)
     with open(filepath, 'wb') as f:
-        f.write(base64.b64encode(encrypted))
+        f.write(encrypted)
 
 def load_encrypted(filepath: str, key: str) -> dict:
     if not os.path.exists(filepath):
         return None
     with open(filepath, 'rb') as f:
-        encrypted = base64.b64decode(f.read())
-    return json.loads(xor_encrypt_decrypt(encrypted, key).decode('utf-8'))
+        encrypted = f.read()
+    decrypted = xor_encrypt_decrypt(encrypted, key)
+    return json.loads(decrypted.decode('utf-8'))
 
 # --- Scraper ---
 
