@@ -58,12 +58,10 @@ async function buildIndex() {
       
       for (const film of films) {
         indexData.push({
-          code: film.code,
-          title: film.title,
-          releaseDate: film.releaseDate,
-          thumbnail: film.thumbnail,
-          genres: film.metadata?.genre || [],
-          actresses: film.metadata?.actress || []
+          t: film.title,
+          d: film.releaseDate,
+          g: film.metadata?.genre || [],
+          a: film.metadata?.actress || []
         });
         totalMovies++;
       }
