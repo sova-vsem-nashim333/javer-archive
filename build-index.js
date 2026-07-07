@@ -4,13 +4,28 @@ const path = require('path');
 
 const KEY = process.env.XOR_KEY || 'MyM0v1eK3y';
 
-function xor(data) {
-  let result = '';
-  for (let i = 0; i < data.length; i++) {
-    result += String.fromCharCode(
-      data.charCodeAt(i) ^ KEY.charCodeAt(i % KEY.length)
-    );
+function decrypt(encryptedPath) {
+  // Читаем как бинарный буфер, а не как UTF-8 строку
+  const bytes = fs.readFileSync(encryptedPath);
+  const keyBytes = Buffer.from(KEY, 'utf8');
+  
+  const result = Buffer.alloc(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    result[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
   }
+  
+  return result.toString('utf8');
+}
+
+function encrypt(text) {
+  const bytes = Buffer.from(text, 'utf8');
+  const keyBytes = Buffer.from(KEY, 'utf8');
+  
+  const result = Buffer.alloc(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    result[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
+  }
+  
   return result;
 }
 
@@ -23,7 +38,7 @@ async function buildIndex() {
   
   if (!fs.existsSync(dataDir)) {
     console.log('❌ data/ не существует');
-    fs.writeFileSync(path.join(indexDir, 'index.bin'), xor('[]'));
+    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt('[]'));
     return;
   }
   
@@ -35,10 +50,9 @@ async function buildIndex() {
   
   for (const file of files) {
     const filePath = path.join(dataDir, file);
-    const encrypted = fs.readFileSync(filePath, 'utf8');
     
     try {
-      const decrypted = xor(encrypted);
+      const decrypted = decrypt(filePath);
       const data = JSON.parse(decrypted);
       const films = data.films || [];
       
@@ -58,19 +72,12 @@ async function buildIndex() {
       
     } catch (err) {
       console.error(`  ❌ ${file}: ${err.message}`);
-      
-      // Отладка: показываем кусок расшифрованного текста вокруг места ошибки
-      const pos = parseInt(err.message.match(/position (\d+)/)?.[1] || '0');
-      const decrypted = xor(encrypted);
-      console.error(`     Вокруг позиции ${pos}:`);
-      console.error(`     ${decrypted.substring(Math.max(0, pos - 50), pos + 50)}`);
-      console.error(`     Первые 100 символов: ${decrypted.substring(0, 100)}`);
     }
   }
   
-  // Сохраняем индекс
+  // Сохраняем индекс (тоже через байты)
   const indexJSON = JSON.stringify(indexData);
-  const encrypted = xor(indexJSON);
+  const encrypted = encrypt(indexJSON);
   
   fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypted);
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
