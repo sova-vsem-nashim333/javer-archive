@@ -30,7 +30,7 @@ jobs:
       - name: Build Index
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
-        run: node scripts/build-index.js
+        run: node build-index.js
       
       - name: Check for changes
         id: check
