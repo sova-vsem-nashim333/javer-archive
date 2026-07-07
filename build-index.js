@@ -58,6 +58,13 @@ async function buildIndex() {
       
     } catch (err) {
       console.error(`  ❌ ${file}: ${err.message}`);
+      
+      // Отладка: показываем кусок расшифрованного текста вокруг места ошибки
+      const pos = parseInt(err.message.match(/position (\d+)/)?.[1] || '0');
+      const decrypted = xor(encrypted);
+      console.error(`     Вокруг позиции ${pos}:`);
+      console.error(`     ${decrypted.substring(Math.max(0, pos - 50), pos + 50)}`);
+      console.error(`     Первые 100 символов: ${decrypted.substring(0, 100)}`);
     }
   }
   
