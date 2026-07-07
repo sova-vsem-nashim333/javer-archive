@@ -24,9 +24,6 @@ jobs:
         with:
           node-version: '20'
       
-      - name: Create index directory
-        run: mkdir -p index
-      
       - name: Build Index
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
@@ -37,13 +34,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Добавляем только если есть изменения
-          git add index/index.bin index/meta.json
-          
-          # Проверяем есть ли что коммитить
-          if git diff --staged --quiet; then
-            echo "Нет изменений, пропускаем"
-          else
-            git commit -m "🔄 Auto-update search index [skip ci]"
+          # Проверяем что файлы существуют перед git add
+          if [ -f index/index.bin ]; then
+            git add index/index.bin index/meta.json
+            git commit -m "🔄 Auto-update search index [skip ci]" || echo "Нет изменений"
             git push
+          else
+            echo "❌ index/index.bin не создан, проверь скрипт build-index.js"
+            exit 1
           fi
