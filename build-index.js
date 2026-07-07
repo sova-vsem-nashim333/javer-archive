@@ -4,22 +4,11 @@ const path = require('path');
 
 const KEY = process.env.XOR_KEY || 'MyM0v1eK3y';
 
-// Только XOR, без base64
-function decrypt(data) {
+function xor(data) {
   let result = '';
   for (let i = 0; i < data.length; i++) {
     result += String.fromCharCode(
       data.charCodeAt(i) ^ KEY.charCodeAt(i % KEY.length)
-    );
-  }
-  return result;
-}
-
-function encrypt(text) {
-  let result = '';
-  for (let i = 0; i < text.length; i++) {
-    result += String.fromCharCode(
-      text.charCodeAt(i) ^ KEY.charCodeAt(i % KEY.length)
     );
   }
   return result;
@@ -34,7 +23,7 @@ async function buildIndex() {
   
   if (!fs.existsSync(dataDir)) {
     console.log('❌ data/ не существует');
-    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt('[]'));
+    fs.writeFileSync(path.join(indexDir, 'index.bin'), xor('[]'));
     return;
   }
   
@@ -49,33 +38,32 @@ async function buildIndex() {
     const encrypted = fs.readFileSync(filePath, 'utf8');
     
     try {
-      const decrypted = decrypt(encrypted);
-      const movies = JSON.parse(decrypted);
+      const decrypted = xor(encrypted);
+      const data = JSON.parse(decrypted);
+      const films = data.films || [];
       
-      // Плоский массив по 7 элементов
-      for (let i = 0; i < movies.length; i += 7) {
-        indexData.push(
-          movies[i],      // id
-          movies[i + 1],  // title
-          movies[i + 3],  // date
-          movies[i + 5],  // genres
-          movies[i + 6]   // actresses
-        );
+      for (const film of films) {
+        indexData.push({
+          code: film.code,
+          title: film.title,
+          releaseDate: film.releaseDate,
+          thumbnail: film.thumbnail,
+          genres: film.metadata?.genre || [],
+          actresses: film.metadata?.actress || []
+        });
         totalMovies++;
       }
       
-      console.log(`  ${file}: ${movies.length / 7} фильмов`);
+      console.log(`  ${file}: ${films.length} фильмов`);
       
     } catch (err) {
       console.error(`  ❌ ${file}: ${err.message}`);
-      // Покажи первые 50 символов чтобы понять что там
-      console.error(`     Первые 50 байт: ${encrypted.substring(0, 50)}`);
     }
   }
   
-  // Сохраняем индекс (тоже чистый XOR, без base64)
-  const jsonString = JSON.stringify(indexData);
-  const encrypted = encrypt(jsonString);
+  // Сохраняем индекс
+  const indexJSON = JSON.stringify(indexData);
+  const encrypted = xor(indexJSON);
   
   fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypted);
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
@@ -84,7 +72,7 @@ async function buildIndex() {
     filesCount: files.length
   }));
   
-  console.log(`✅ Готово: ${totalMovies} фильмов`);
+  console.log(`✅ Готово: ${totalMovies} фильмов в индексе`);
 }
 
 buildIndex().catch(err => {
