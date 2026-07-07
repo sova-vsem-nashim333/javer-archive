@@ -1,12 +1,9 @@
-// build-index.js
+// build-index.js (в корне репозитория)
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
-// Ключ шифрования (тот же что на клиенте)
-const KEY = process.env.XOR_KEY;
+const KEY = process.env.XOR_KEY || 'MyM0v1eK3y';
 
-// XOR шифрование
 function encrypt(text) {
   let result = '';
   for (let i = 0; i < text.length; i++) {
@@ -17,7 +14,6 @@ function encrypt(text) {
   return Buffer.from(result).toString('base64');
 }
 
-// Расшифровка
 function decrypt(encoded) {
   const decoded = Buffer.from(encoded, 'base64').toString();
   let result = '';
@@ -29,90 +25,79 @@ function decrypt(encoded) {
   return result;
 }
 
-// Парсинг плоского массива обратно в объект
-function parseMovie(arr, baseIndex) {
-  return {
-    id: arr[baseIndex],
-    title: arr[baseIndex + 1],
-    date: arr[baseIndex + 3],
-    genres: arr[baseIndex + 5],
-    actresses: arr[baseIndex + 6]
-  };
-}
-
-// Сборка индекса
 async function buildIndex() {
-  const dataDir = path.join(__dirname, '..', 'data');
-  const indexDir = path.join(__dirname, '..', 'index');
+  // __dirname в корне — это и есть корень репозитория
+  const rootDir = __dirname;
+  const dataDir = path.join(rootDir, 'data');
+  const indexDir = path.join(rootDir, 'index');
   
-  // Создаём папку для индекса если нет
-  if (!fs.existsSync(indexDir)) {
-    fs.mkdirSync(indexDir, { recursive: true });
+  console.log('Корень:', rootDir);
+  console.log('Data:', dataDir);
+  console.log('Index:', indexDir);
+  
+  // Создаём папку index
+  fs.mkdirSync(indexDir, { recursive: true });
+  
+  // Проверяем data
+  if (!fs.existsSync(dataDir)) {
+    console.log('❌ data/ не существует');
+    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt('[]'));
+    fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
+      lastBuild: new Date().toISOString(),
+      totalMovies: 0,
+      filesCount: 0
+    }));
+    return;
   }
   
-  // Читаем все .bin файлы
   const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.bin'));
+  console.log(`Найдено ${files.length} .bin файлов`);
   
-  console.log(`Найдено ${files.length} файлов для индексации`);
+  if (files.length === 0) {
+    console.log('⚠️ Пусто');
+    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt('[]'));
+    fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
+      lastBuild: new Date().toISOString(),
+      totalMovies: 0,
+      filesCount: 0
+    }));
+    return;
+  }
   
   const indexData = [];
   let totalMovies = 0;
   
   for (const file of files) {
-    const filePath = path.join(dataDir, file);
-    const encrypted = fs.readFileSync(filePath, 'utf8');
-    
+    const encrypted = fs.readFileSync(path.join(dataDir, file), 'utf8');
     try {
-      // Расшифровываем
       const decrypted = decrypt(encrypted);
       const movies = JSON.parse(decrypted);
       
-      // Извлекаем только нужные поля (7 элементов на фильм)
       for (let i = 0; i < movies.length; i += 7) {
         indexData.push(
-          movies[i],      // id
-          movies[i + 1],  // title
-          movies[i + 3],  // date (только дата)
-          movies[i + 5],  // genres (строка)
-          movies[i + 6]   // actresses (строка)
+          movies[i], movies[i + 1], movies[i + 3], movies[i + 5], movies[i + 6]
         );
         totalMovies++;
       }
-      
       console.log(`  ${file}: ${movies.length / 7} фильмов`);
-      
     } catch (err) {
-      console.error(`  Ошибка в ${file}: ${err.message}`);
+      console.error(`  ❌ ${file}: ${err.message}`);
     }
   }
   
-  // Сохраняем индекс
-  const jsonString = JSON.stringify(indexData);
-  const encrypted = encrypt(jsonString);
-  
+  const encrypted = encrypt(JSON.stringify(indexData));
   fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypted);
   
-  // Статистика
-  const stats = fs.statSync(path.join(indexDir, 'index.bin'));
-  const sizeKB = (stats.size / 1024).toFixed(2);
-  
-  console.log(`\n✅ Индекс готов:`);
-  console.log(`   Фильмов: ${totalMovies}`);
-  console.log(`   Размер: ${sizeKB} KB`);
-  console.log(`   Элементов: ${indexData.length}`);
-  
-  // Сохраняем метаданные индекса
-  const meta = {
+  fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
     lastBuild: new Date().toISOString(),
     totalMovies,
-    filesCount: files.length,
-    sizeBytes: stats.size
-  };
+    filesCount: files.length
+  }));
   
-  fs.writeFileSync(
-    path.join(indexDir, 'meta.json'),
-    JSON.stringify(meta, null, 2)
-  );
+  console.log(`✅ Готово: ${totalMovies} фильмов`);
 }
 
-buildIndex().catch(console.error);
+buildIndex().catch(err => {
+  console.error('💥 Ошибка:', err);
+  process.exit(1);
+});
