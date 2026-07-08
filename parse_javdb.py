@@ -61,8 +61,10 @@ scraper_pool = queue.Queue(maxsize=POOL_SIZE)
 KEY_MAP = {
     'c': 'code',
     't': 'title',
+    'd': 'description',  # Для чтения старых данных
     'th': 'thumbnail',
     'ss': 'screenshots',
+    'mt': 'metadata',
     'g': 'genre',
     'a': 'actress',
     'rd': 'releaseDate',
@@ -70,8 +72,7 @@ KEY_MAP = {
     'ga': 'generatedAt',
     'm': 'month',
     'tf': 'totalFilms',
-    'f': 'films',
-    'mt': 'metadata'
+    'f': 'films'
 }
 
 # Обратный маппинг для загрузки
@@ -80,7 +81,13 @@ REV_KEY_MAP = {v: k for k, v in KEY_MAP.items()}
 def minify_json(data):
     """Минифицирует JSON, заменяя длинные ключи на короткие"""
     if isinstance(data, dict):
-        return {REV_KEY_MAP.get(k, k): minify_json(v) for k, v in data.items()}
+        result = {}
+        for k, v in data.items():
+            # Пропускаем description с пустым значением
+            if k == 'description' and not v:
+                continue
+            result[REV_KEY_MAP.get(k, k)] = minify_json(v)
+        return result
     elif isinstance(data, list):
         return [minify_json(item) for item in data]
     return data
@@ -104,9 +111,7 @@ def xor_encrypt_decrypt(data: bytes, key: str) -> bytes:
 
 def save_encrypted(data: dict, filepath: str, key: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    # Минифицируем данные перед сохранением
     minified = minify_json(data)
-    # Используем compact JSON без пробелов и переносов
     json_str = json.dumps(minified, ensure_ascii=False, separators=(',', ':'))
     encrypted = xor_encrypt_decrypt(json_str.encode('utf-8'), key)
     with open(filepath, 'wb') as f:
@@ -119,7 +124,6 @@ def load_encrypted(filepath: str, key: str) -> dict:
         encrypted = f.read()
     decrypted = xor_encrypt_decrypt(encrypted, key)
     data = json.loads(decrypted.decode('utf-8'))
-    # Разворачиваем обратно для совместимости с кодом
     return expand_json(data)
 
 # --- Scraper pool ---
@@ -229,7 +233,7 @@ def save_month_batch(month_films_dict, key):
     
     return total
 
-# --- Парсинг фильма (без description) ---
+# --- Парсинг фильма (description не сохраняем) ---
 
 def parse_film_page(url_path):
     for attempt in range(MAX_RETRIES):
@@ -273,7 +277,7 @@ def parse_film_page(url_path):
                     title = title_tag.get_text(strip=True).replace(' - JAV Database', '')
             film_data['title'] = title or 'No Title'
 
-            # Описание больше не парсим!
+            # Description НЕ ПАРСИМ и НЕ СОХРАНЯЕМ
 
             # Обложка
             thumb = None
