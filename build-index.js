@@ -5,7 +5,6 @@ const path = require('path');
 const KEY = process.env.XOR_KEY || 'MyM0v1eK3y';
 
 function decrypt(encryptedPath) {
-  // Читаем как бинарный буфер, а не как UTF-8 строку
   const bytes = fs.readFileSync(encryptedPath);
   const keyBytes = Buffer.from(KEY, 'utf8');
   
@@ -27,6 +26,20 @@ function encrypt(text) {
   }
   
   return result;
+}
+
+/**
+ * Нормализация фильма из любого формата
+ * Поддерживает новую структуру (c, t, th, ss, mt, rd) и старую (code, title, ...)
+ */
+function normalizeFilm(film) {
+  return {
+    code: film.c || film.code || '',
+    title: film.t || film.title || '',
+    releaseDate: film.rd || film.releaseDate || null,
+    genres: (film.mt?.g || film.metadata?.genre || []),
+    actresses: (film.mt?.a || film.metadata?.actress || [])
+  };
 }
 
 async function buildIndex() {
@@ -54,14 +67,20 @@ async function buildIndex() {
     try {
       const decrypted = decrypt(filePath);
       const data = JSON.parse(decrypted);
-      const films = data.films || [];
+      
+      // Поддержка обоих форматов: films (полный) и f (минифицированный)
+      const films = data.films || data.f || [];
       
       for (const film of films) {
+        const normalized = normalizeFilm(film);
+        
+        // Индекс хранит только то, что нужно для поиска
         indexData.push({
-          t: film.title,
-          d: film.releaseDate,
-          g: film.metadata?.genre || [],
-          a: film.metadata?.actress || []
+          c: normalized.code,        // code
+          t: normalized.title,       // title
+          rd: normalized.releaseDate, // releaseDate
+          g: normalized.genres,      // genres
+          a: normalized.actresses    // actresses
         });
         totalMovies++;
       }
@@ -73,11 +92,13 @@ async function buildIndex() {
     }
   }
   
-  // Сохраняем индекс (тоже через байты)
+  // Сохраняем индекс в минифицированном формате
   const indexJSON = JSON.stringify(indexData);
   const encrypted = encrypt(indexJSON);
   
   fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypted);
+  
+  // Метаданные индекса
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
     lastBuild: new Date().toISOString(),
     totalMovies,
@@ -85,6 +106,12 @@ async function buildIndex() {
   }));
   
   console.log(`✅ Готово: ${totalMovies} фильмов в индексе`);
+  
+  // Выводим пример для проверки
+  if (indexData.length > 0) {
+    console.log('\n📋 Пример записи в индексе:');
+    console.log(JSON.stringify(indexData[0], null, 2));
+  }
 }
 
 buildIndex().catch(err => {
