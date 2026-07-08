@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:
-    inputs:
-      test_mode:
-        description: 'Тестовый режим'
-        type: boolean
-        default: true
 
 jobs:
   parse:
@@ -31,16 +26,5 @@ jobs:
       - name: Run parser
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
-          TEST_MODE: '${{ github.event.inputs.test_mode || ''true'' }}'
         run: python parse_javdb.py
         timeout-minutes: 360
-          
-      - name: Upload test results
-        if: github.event.inputs.test_mode == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: |
-            data/*.json
-            metadata.json
-          retention-days: 7
