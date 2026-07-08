@@ -31,9 +31,6 @@ CACHE_FILE = "sitemap_cache.json"
 DATA_DIR = "data"
 METADATA_FILE = "metadata.json"
 
-TEST_MODE = os.environ.get('TEST_MODE', 'false').lower() == 'true'
-TEST_SITEMAP_LIMIT = int(os.environ.get('TEST_SITEMAP_LIMIT', '1'))
-TEST_FILM_LIMIT = int(os.environ.get('TEST_FILM_LIMIT', '5'))
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '2'))
 POOL_SIZE = MAX_WORKERS + 2
 
@@ -492,8 +489,6 @@ def main():
     start_time = time.time()
     logger.info("="*60)
     logger.info(f"Парсер JAVDatabase (workers={MAX_WORKERS}, timeout=60s)")
-    if TEST_MODE:
-        logger.info(f"ТЕСТ: {TEST_SITEMAP_LIMIT} sitemap, {TEST_FILM_LIMIT} фильмов")
     logger.info("="*60)
     
     init_scraper_pool(POOL_SIZE)
@@ -532,26 +527,12 @@ def main():
     existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
     
-    if TEST_MODE:
-        movie_sitemaps = movie_sitemaps[:TEST_SITEMAP_LIMIT]
-    
     total_parsed = 0
     for i, sitemap_url in enumerate(movie_sitemaps, 1):
         logger.info(f"[{i}/{len(movie_sitemaps)}]")
         
         parsed = process_sitemap(sitemap_url, existing_codes, XOR_KEY, cache)
         total_parsed += parsed
-        
-        if TEST_MODE and total_parsed >= TEST_FILM_LIMIT:
-            break
-    
-    if TEST_MODE:
-        for f in os.listdir(DATA_DIR):
-            if f.endswith('.bin'):
-                data = load_encrypted(os.path.join(DATA_DIR, f), XOR_KEY)
-                json_path = os.path.join(DATA_DIR, f.replace('.bin', '.json'))
-                with open(json_path, 'w', encoding='utf-8') as fp:
-                    json.dump(data, fp, ensure_ascii=False, indent=2)
     
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({
