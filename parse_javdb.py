@@ -76,7 +76,21 @@ KEY_MAP = {
 }
 
 # Обратный маппинг для загрузки
-REV_KEY_MAP = {v: k for k, v in KEY_MAP.items()}
+REV_KEY_MAP = {
+    'code': 'c',
+    'title': 't',
+    'thumbnail': 'th',
+    'screenshots': 'ss',
+    'metadata': 'mt',
+    'genre': 'g',
+    'actress': 'a',
+    'releaseDate': 'rd',
+    'version': 'v',
+    'generatedAt': 'ga',
+    'month': 'm',
+    'totalFilms': 'tf',
+    'films': 'f'
+}
 
 def minify_json(data):
     """Минифицирует JSON, заменяя длинные ключи на короткие"""
@@ -276,9 +290,7 @@ def parse_film_page(url_path):
                 if title_tag:
                     title = title_tag.get_text(strip=True).replace(' - JAV Database', '')
             film_data['title'] = title or 'No Title'
-
-            # Description НЕ ПАРСИМ и НЕ СОХРАНЯЕМ
-
+            
             # Обложка
             thumb = None
             poster = soup.find('div', id='poster-container')
