@@ -1,0 +1,345 @@
+name: Convert BIN Files
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_backup:
+        description: 'Создать бэкап перед конвертацией'
+        required: true
+        type: boolean
+        default: true
+      commit_changes:
+        description: 'Закоммитить изменения'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Дополнительные зависимости если нужны
+      
+      - name: Create convert script
+        run: |
+          cat > convert_bins.py << 'PYTHON_EOF'
+          import json
+          import os
+          import sys
+          import logging
+          import shutil
+          from datetime import datetime, timezone
+
+          logging.basicConfig(
+              level=logging.INFO,
+              format='%(asctime)s - %(levelname)s - %(message)s',
+              handlers=[logging.StreamHandler(sys.stdout)]
+          )
+          logger = logging.getLogger(__name__)
+
+          DATA_DIR = "data"
+          XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
+          BACKUP_DIR = "data_backup_$(date +%Y%m%d_%H%M%S)"
+
+          NEW_KEYS = {
+              'code': 'c',
+              'title': 't',
+              'thumbnail': 'th',
+              'screenshots': 'ss',
+              'metadata': 'mt',
+              'genre': 'g',
+              'actress': 'a',
+              'releaseDate': 'rd',
+              'version': 'v',
+              'generatedAt': 'ga',
+              'month': 'm',
+              'totalFilms': 'tf',
+              'films': 'f'
+          }
+
+          def xor_encrypt_decrypt(data, key):
+              key_bytes = key.encode('utf-8')
+              result = bytearray(len(data))
+              for i in range(len(data)):
+                  result[i] = data[i] ^ key_bytes[i % len(key_bytes)]
+              return bytes(result)
+
+          def load_encrypted(filepath, key):
+              if not os.path.exists(filepath):
+                  return None
+              with open(filepath, 'rb') as f:
+                  encrypted = f.read()
+              decrypted = xor_encrypt_decrypt(encrypted, key)
+              return json.loads(decrypted.decode('utf-8'))
+
+          def save_encrypted(data, filepath, key):
+              json_str = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+              encrypted = xor_encrypt_decrypt(json_str.encode('utf-8'), key)
+              with open(filepath, 'wb') as f:
+                  f.write(encrypted)
+
+          def normalize_film(film):
+              normalized = {}
+              
+              field_mapping = {
+                  'code': ['code', 'c'],
+                  'title': ['title', 't'],
+                  'thumbnail': ['thumbnail', 'th'],
+                  'screenshots': ['screenshots', 'ss'],
+                  'releaseDate': ['releaseDate', 'rd']
+              }
+              
+              for full_key, possible_keys in field_mapping.items():
+                  for key in possible_keys:
+                      if key in film:
+                          normalized[full_key] = film[key]
+                          break
+              
+              metadata = {}
+              mt_data = film.get('metadata') or film.get('mt') or {}
+              
+              genres = mt_data.get('genre') or mt_data.get('g') or []
+              if genres:
+                  metadata['genre'] = genres
+              
+              actresses = mt_data.get('actress') or mt_data.get('a') or []
+              if actresses:
+                  metadata['actress'] = actresses
+              
+              if metadata:
+                  normalized['metadata'] = metadata
+              
+              return normalized
+
+          def normalize_data(data):
+              if not data:
+                  return data
+              
+              normalized = {}
+              
+              films = data.get('films') or data.get('f') or []
+              normalized_films = [normalize_film(film) for film in films]
+              normalized['films'] = normalized_films
+              
+              meta = data.get('metadata') or data.get('mt') or {}
+              
+              normalized_meta = {
+                  'version': meta.get('version') or meta.get('v') or '1.0.0',
+                  'generatedAt': meta.get('generatedAt') or meta.get('ga') or datetime.now(timezone.utc).isoformat(),
+                  'month': meta.get('month') or meta.get('m') or 'unknown',
+                  'totalFilms': meta.get('totalFilms') or meta.get('tf') or len(normalized_films)
+              }
+              
+              normalized['metadata'] = normalized_meta
+              return normalized
+
+          def minify_final(data):
+              if isinstance(data, dict):
+                  result = {}
+                  for k, v in data.items():
+                      new_key = NEW_KEYS.get(k, k)
+                      result[new_key] = minify_final(v)
+                  return result
+              elif isinstance(data, list):
+                  return [minify_final(item) for item in data]
+              return data
+
+          # Основная логика
+          import subprocess
+          import time
+
+          # Создаем бэкап с временной меткой
+          backup_dir = f"data_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+          
+          create_backup = '${{ github.event.inputs.create_backup }}' == 'true'
+          if create_backup and os.path.exists(DATA_DIR):
+              logger.info(f"Создаю бэкап в {backup_dir}")
+              shutil.copytree(DATA_DIR, backup_dir)
+              logger.info("Бэкап создан")
+
+          if not os.path.exists(DATA_DIR):
+              logger.error(f"Директория {DATA_DIR} не найдена")
+              sys.exit(1)
+
+          bin_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.bin')]
+          logger.info(f"Найдено {len(bin_files)} .bin файлов")
+
+          total_converted = 0
+          total_films = 0
+          total_description_removed = 0
+
+          for filename in bin_files:
+              filepath = os.path.join(DATA_DIR, filename)
+              
+              try:
+                  data = load_encrypted(filepath, XOR_KEY)
+                  if not data:
+                      logger.warning(f"  ✗ {filename}: не удалось загрузить")
+                      continue
+                  
+                  films_before = len(data.get('films', data.get('f', [])))
+                  
+                  # Считаем description
+                  has_description = 0
+                  for film in data.get('films', data.get('f', [])):
+                      if 'description' in film or 'd' in film:
+                          has_description += 1
+                  
+                  normalized = normalize_data(data)
+                  minified = minify_final(normalized)
+                  save_encrypted(minified, filepath, XOR_KEY)
+                  
+                  films_after = len(normalized['films'])
+                  
+                  logger.info(f"  ✓ {filename}: {films_after} фильмов (description удален: {has_description})")
+                  
+                  total_converted += 1
+                  total_films += films_after
+                  total_description_removed += has_description
+                  
+              except Exception as e:
+                  logger.error(f"  ✗ {filename}: ошибка - {e}")
+
+          logger.info("="*60)
+          logger.info(f"Конвертация завершена!")
+          logger.info(f"Обработано файлов: {total_converted}/{len(bin_files)}")
+          logger.info(f"Всего фильмов: {total_films}")
+          logger.info(f"Удалено description: {total_description_removed}")
+          if create_backup:
+              logger.info(f"Бэкап: {backup_dir}")
+          logger.info("="*60)
+
+          # Сохраняем статистику
+          stats = {
+              "conversionDate": datetime.now(timezone.utc).isoformat(),
+              "filesConverted": total_converted,
+              "totalFiles": len(bin_files),
+              "totalFilms": total_films,
+              "descriptionsRemoved": total_description_removed,
+              "backupCreated": create_backup,
+              "backupDir": backup_dir if create_backup else None
+          }
+          
+          with open('conversion_stats.json', 'w', encoding='utf-8') as f:
+              json.dump(stats, f, ensure_ascii=False, indent=2)
+          PYTHON_EOF
+        shell: bash
+      
+      - name: Run conversion
+        env:
+          XOR_KEY: ${{ secrets.XOR_KEY }}
+        run: python convert_bins.py
+      
+      - name: Show conversion stats
+        run: |
+          if [ -f conversion_stats.json ]; then
+            echo "=== Conversion Statistics ==="
+            cat conversion_stats.json
+          fi
+      
+      - name: Test load converted files
+        run: |
+          cat > test_load.py << 'PYTHON_EOF'
+          import json
+          import os
+          import sys
+
+          DATA_DIR = "data"
+          XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
+
+          def xor_encrypt_decrypt(data, key):
+              key_bytes = key.encode('utf-8')
+              result = bytearray(len(data))
+              for i in range(len(data)):
+                  result[i] = data[i] ^ key_bytes[i % len(key_bytes)]
+              return bytes(result)
+
+          def load_encrypted(filepath, key):
+              if not os.path.exists(filepath):
+                  return None
+              with open(filepath, 'rb') as f:
+                  encrypted = f.read()
+              decrypted = xor_encrypt_decrypt(encrypted, key)
+              return json.loads(decrypted.decode('utf-8'))
+
+          # Проверяем первые 3 файла
+          bin_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.bin')][:3]
+          
+          print("=== Testing converted files ===")
+          for filename in bin_files:
+              filepath = os.path.join(DATA_DIR, filename)
+              data = load_encrypted(filepath, XOR_KEY)
+              
+              if data:
+                  films = data.get('f', [])
+                  print(f"\n✓ {filename}: {len(films)} films")
+                  
+                  # Проверяем структуру
+                  if films:
+                      sample = films[0]
+                      required_keys = ['c', 't', 'th', 'ss', 'mt', 'rd']
+                      has_all = all(k in sample for k in required_keys)
+                      has_description = 'd' in sample or 'description' in sample
+                      
+                      print(f"  Structure valid: {has_all}")
+                      print(f"  No description: {not has_description}")
+                      print(f"  Sample: {json.dumps(sample, ensure_ascii=False)[:200]}...")
+              else:
+                  print(f"\n✗ {filename}: Failed to load")
+          
+          print("\n=== Test completed ===")
+          PYTHON_EOF
+          
+          python test_load.py
+        env:
+          XOR_KEY: ${{ secrets.XOR_KEY }}
+      
+      - name: Commit converted files
+        if: github.event.inputs.commit_changes == 'true'
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          
+          # Добавляем только измененные data файлы
+          git add data/
+          
+          # Проверяем есть ли изменения
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Convert BIN files to new structure (removed description, minified keys)"
+            git pull --rebase
+            git push
+            echo "Changes committed and pushed"
+          fi
+      
+      - name: Upload backup as artifact
+        if: github.event.inputs.create_backup == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-backup-${{ github.run_id }}
+          path: data_backup_*/
+          retention-days: 7
+      
+      - name: Upload stats
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversion-stats-${{ github.run_id }}
+          path: conversion_stats.json
+          retention-days: 30
