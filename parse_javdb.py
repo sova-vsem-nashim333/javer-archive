@@ -57,26 +57,8 @@ cache_lock = Lock()
 # Пул scraper'ов
 scraper_pool = queue.Queue(maxsize=POOL_SIZE)
 
-# --- Маппинг сокращенных ключей ---
-KEY_MAP = {
-    'c': 'code',
-    't': 'title',
-    'd': 'description',  # Для чтения старых данных
-    'th': 'thumbnail',
-    'ss': 'screenshots',
-    'mt': 'metadata',
-    'g': 'genre',
-    'a': 'actress',
-    'rd': 'releaseDate',
-    'v': 'version',
-    'ga': 'generatedAt',
-    'm': 'month',
-    'tf': 'totalFilms',
-    'f': 'films'
-}
-
-# Обратный маппинг для загрузки
-REV_KEY_MAP = {
+# --- Маппинг для новых сокращенных ключей ---
+NEW_KEYS = {
     'code': 'c',
     'title': 't',
     'thumbnail': 'th',
@@ -92,26 +74,54 @@ REV_KEY_MAP = {
     'films': 'f'
 }
 
+# Ключи, которые могут быть в старых данных
+OLD_KEYS = {
+    'c': 'code',
+    't': 'title',
+    'd': 'description',
+    'th': 'thumbnail',
+    'ss': 'screenshots',
+    'mt': 'metadata',
+    'g': 'genre',
+    'a': 'actress',
+    'rd': 'releaseDate',
+    'v': 'version',
+    'ga': 'generatedAt',
+    'm': 'month',
+    'tf': 'totalFilms',
+    'f': 'films'
+}
+
 def minify_json(data):
-    """Минифицирует JSON, заменяя длинные ключи на короткие"""
+    """Минифицирует JSON для сохранения (без description)"""
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
-            # Пропускаем description с пустым значением
-            if k == 'description' and not v:
+            # Пропускаем description
+            if k == 'description':
                 continue
-            result[REV_KEY_MAP.get(k, k)] = minify_json(v)
+            # Используем новые ключи
+            new_key = NEW_KEYS.get(k, k)
+            result[new_key] = minify_json(v)
         return result
     elif isinstance(data, list):
         return [minify_json(item) for item in data]
     return data
 
-def expand_json(data):
-    """Разворачивает минифицированный JSON обратно"""
+def normalize_json(data):
+    """Нормализует JSON после загрузки (поддерживает и старые и новые ключи)"""
     if isinstance(data, dict):
-        return {KEY_MAP.get(k, k): expand_json(v) for k, v in data.items()}
+        result = {}
+        for k, v in data.items():
+            # Пробуем найти в старых сокращенных ключах
+            if k in OLD_KEYS:
+                result[OLD_KEYS[k]] = normalize_json(v)
+            else:
+                # Или оставляем как есть (для полных ключей из старых данных)
+                result[k] = normalize_json(v)
+        return result
     elif isinstance(data, list):
-        return [expand_json(item) for item in data]
+        return [normalize_json(item) for item in data]
     return data
 
 # --- Шифрование ---
@@ -125,7 +135,9 @@ def xor_encrypt_decrypt(data: bytes, key: str) -> bytes:
 
 def save_encrypted(data: dict, filepath: str, key: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    # Минифицируем перед сохранением
     minified = minify_json(data)
+    # Компактный JSON
     json_str = json.dumps(minified, ensure_ascii=False, separators=(',', ':'))
     encrypted = xor_encrypt_decrypt(json_str.encode('utf-8'), key)
     with open(filepath, 'wb') as f:
@@ -138,7 +150,8 @@ def load_encrypted(filepath: str, key: str) -> dict:
         encrypted = f.read()
     decrypted = xor_encrypt_decrypt(encrypted, key)
     data = json.loads(decrypted.decode('utf-8'))
-    return expand_json(data)
+    # Нормализуем (поддерживает старые и новые форматы)
+    return normalize_json(data)
 
 # --- Scraper pool ---
 
@@ -247,7 +260,7 @@ def save_month_batch(month_films_dict, key):
     
     return total
 
-# --- Парсинг фильма (description не сохраняем) ---
+# --- Парсинг фильма (БЕЗ description) ---
 
 def parse_film_page(url_path):
     for attempt in range(MAX_RETRIES):
@@ -290,7 +303,7 @@ def parse_film_page(url_path):
                 if title_tag:
                     title = title_tag.get_text(strip=True).replace(' - JAV Database', '')
             film_data['title'] = title or 'No Title'
-            
+
             # Обложка
             thumb = None
             poster = soup.find('div', id='poster-container')
