@@ -1,6 +1,7 @@
 // build-index.js
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const msgpack = require('@msgpack/msgpack');
 
 const KEY = process.env.XOR_KEY || 'MyM0v1eK3y';
@@ -54,7 +55,8 @@ async function buildIndex() {
   if (!fs.existsSync(dataDir)) {
     console.log('❌ data/ не существует');
     const emptyIndex = msgpack.encode([]);
-    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt(emptyIndex));
+    const compressed = zlib.gzipSync(emptyIndex);
+    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt(compressed));
     return;
   }
   
@@ -95,21 +97,30 @@ async function buildIndex() {
     }
   }
   
-  // Сохраняем индекс в MessagePack формате с XOR-шифрованием
+  // Сохраняем индекс: msgpack → gzip → xor
   const indexBuffer = msgpack.encode(indexData);
-  const encrypted = encrypt(indexBuffer);
+  const compressed = zlib.gzipSync(indexBuffer, { level: 9 });
+  const encrypted = encrypt(compressed);
   
   fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypted);
   
   // Метаданные индекса
+  const sizes = {
+    msgpack: indexBuffer.length,
+    gzip: compressed.length,
+    final: encrypted.length
+  };
+  
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
     lastBuild: new Date().toISOString(),
     totalMovies,
     filesCount: files.length,
-    format: 'msgpack'
+    format: 'msgpack+gzip',
+    sizes
   }));
   
   console.log(`✅ Готово: ${totalMovies} фильмов в индексе`);
+  console.log(`📦 Размеры: msgpack=${sizes.msgpack}B → gzip=${sizes.gzip}B → final=${sizes.final}B`);
   
   // Выводим пример для проверки
   if (indexData.length > 0) {
