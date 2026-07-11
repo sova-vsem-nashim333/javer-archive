@@ -1,6 +1,7 @@
 // build-index.js
 const fs = require('fs');
 const path = require('path');
+const msgpack = require('@msgpack/msgpack');
 
 const KEY = process.env.XOR_KEY || 'MyM0v1eK3y';
 
@@ -16,8 +17,9 @@ function decrypt(encryptedPath) {
   return result.toString('utf8');
 }
 
-function encrypt(text) {
-  const bytes = Buffer.from(text, 'utf8');
+function encrypt(data) {
+  // data может быть строкой или Buffer
+  const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
   const keyBytes = Buffer.from(KEY, 'utf8');
   
   const result = Buffer.alloc(bytes.length);
@@ -51,7 +53,8 @@ async function buildIndex() {
   
   if (!fs.existsSync(dataDir)) {
     console.log('❌ data/ не существует');
-    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt('[]'));
+    const emptyIndex = msgpack.encode([]);
+    fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypt(emptyIndex));
     return;
   }
   
@@ -92,9 +95,9 @@ async function buildIndex() {
     }
   }
   
-  // Сохраняем индекс в минифицированном формате
-  const indexJSON = JSON.stringify(indexData);
-  const encrypted = encrypt(indexJSON);
+  // Сохраняем индекс в MessagePack формате с XOR-шифрованием
+  const indexBuffer = msgpack.encode(indexData);
+  const encrypted = encrypt(indexBuffer);
   
   fs.writeFileSync(path.join(indexDir, 'index.bin'), encrypted);
   
@@ -102,7 +105,8 @@ async function buildIndex() {
   fs.writeFileSync(path.join(indexDir, 'meta.json'), JSON.stringify({
     lastBuild: new Date().toISOString(),
     totalMovies,
-    filesCount: files.length
+    filesCount: files.length,
+    format: 'msgpack'
   }));
   
   console.log(`✅ Готово: ${totalMovies} фильмов в индексе`);
