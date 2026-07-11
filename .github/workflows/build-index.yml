@@ -17,24 +17,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
       
+      - name: Install dependencies
+        run: npm install @msgpack/msgpack
+      
       - name: Build Index
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
         run: node build-index.js
-      
-      - name: Setup Git LFS
-        run: |
-          git lfs install
-          git lfs track "index/index.bin"
-          git add .gitattributes
       
       - name: Commit and push
         run: |
@@ -42,7 +37,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           if [ -f index/index.bin ]; then
-            git add index/index.bin index/meta.json .gitattributes
+            git add index/index.bin index/meta.json
             git commit -m "🔄 Auto-update search index [skip ci]" || echo "Нет изменений"
             git push
           else
