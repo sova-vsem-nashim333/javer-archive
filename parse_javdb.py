@@ -8,7 +8,7 @@ import queue
 import subprocess
 import requests
 from urllib.parse import urljoin, urlparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import sys
 import random
@@ -120,6 +120,31 @@ def normalize_json(data):
     elif isinstance(data, list):
         return [normalize_json(item) for item in data]
     return data
+
+def parse_datetime(date_str):
+    """Парсит дату из различных форматов"""
+    if not date_str:
+        return None
+    
+    # Форматы дат, которые могут встретиться
+    formats = [
+        '%Y-%m-%dT%H:%M:%S%z',  # 2026-07-11T15:36:08+00:00
+        '%Y-%m-%dT%H:%M:%S+00:00',  # без двоеточия в timezone
+        '%Y-%m-%dT%H:%M:%SZ',  # UTC формат
+        '%Y-%m-%d %H:%M:%S',  # простой формат
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except:
+            continue
+    
+    # Пробуем ISO format как запасной вариант
+    try:
+        return datetime.fromisoformat(date_str)
+    except:
+        return None
 
 # --- Шифрование ---
 
@@ -367,11 +392,28 @@ def parse_film_page(url_path):
 # --- Обработка sitemap ---
 
 def process_sitemap(sitemap_url, existing_codes, key, cache):
-    if sitemap_url in cache:
-        logger.info(f"  Пропуск (в кэше): {sitemap_url}")
-        return 0
+    """Обрабатывает sitemap только если он изменился (по lastmod)"""
+    
+    # Получаем lastmod из sitemap_index.xml
+    sitemap_lastmod = cache.get('sitemap_index_data', {}).get(sitemap_url)
+    
+    # Проверяем, нужно ли обрабатывать
+    if sitemap_url in cache.get('processed', {}):
+        cached_time_str = cache['processed'][sitemap_url]
+        if sitemap_lastmod and cached_time_str:
+            sitemap_time = parse_datetime(sitemap_lastmod)
+            cached_time = parse_datetime(cached_time_str)
+            
+            if sitemap_time and cached_time:
+                # Если lastmod не новее кэшированного времени - пропускаем
+                if sitemap_time <= cached_time:
+                    logger.info(f"  Пропуск (не изменился): {sitemap_url}")
+                    logger.info(f"    lastmod: {sitemap_lastmod}, кэш: {cached_time_str}")
+                    return 0
     
     logger.info(f"  Загрузка: {sitemap_url}")
+    if sitemap_lastmod:
+        logger.info(f"    lastmod: {sitemap_lastmod}")
     
     scraper = get_scraper()
     try:
@@ -401,8 +443,11 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
         logger.info(f"  Новых URL: {len(urls)}")
         
         if not urls:
+            # Даже если нет новых URL, обновляем кэш
             with cache_lock:
-                cache[sitemap_url] = datetime.now(timezone.utc).isoformat()
+                if 'processed' not in cache:
+                    cache['processed'] = {}
+                cache['processed'][sitemap_url] = datetime.now(timezone.utc).isoformat()
             return 0
         
         # Многопоточный парсинг
@@ -443,7 +488,9 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
         
         # Кэш
         with cache_lock:
-            cache[sitemap_url] = datetime.now(timezone.utc).isoformat()
+            if 'processed' not in cache:
+                cache['processed'] = {}
+            cache['processed'][sitemap_url] = datetime.now(timezone.utc).isoformat()
             with open(CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache, f, indent=2)
         
@@ -507,32 +554,59 @@ def main():
     root = ET.fromstring(resp.content)
     ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
     
-    movie_sitemaps = []
+    # Извлекаем sitemap с их lastmod
+    movie_sitemaps = {}
+    sitemap_index_data = {}
+    
     for sitemap in root.findall('sm:sitemap', ns):
         loc = sitemap.find('sm:loc', ns)
+        lastmod = sitemap.find('sm:lastmod', ns)
+        
         if loc is not None and 'movies-sitemap' in loc.text:
-            movie_sitemaps.append(loc.text)
+            lastmod_text = lastmod.text if lastmod is not None else None
+            movie_sitemaps[loc.text] = lastmod_text
+            sitemap_index_data[loc.text] = lastmod_text
     
     logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
     
+    # Загружаем кэш
     cache = {}
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 cache = json.load(f)
-            logger.info(f"Кэш: {len(cache)} sitemap'ов")
+            logger.info(f"Кэш загружен, обработано sitemap'ов: {len(cache.get('processed', {}))}")
         except:
-            pass
+            cache = {'processed': {}, 'sitemap_index_data': {}}
+    else:
+        cache = {'processed': {}, 'sitemap_index_data': {}}
+    
+    # Обновляем данные sitemap_index в кэше
+    cache['sitemap_index_data'] = sitemap_index_data
+    
+    # Сохраняем обновленный кэш с новыми данными индекса
+    with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=2)
     
     existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
     
     total_parsed = 0
-    for i, sitemap_url in enumerate(movie_sitemaps, 1):
-        logger.info(f"[{i}/{len(movie_sitemaps)}]")
+    skipped = 0
+    processed = 0
+    
+    for i, (sitemap_url, lastmod) in enumerate(movie_sitemaps.items(), 1):
+        logger.info(f"[{i}/{len(movie_sitemaps)}] {sitemap_url}")
+        if lastmod:
+            logger.info(f"  lastmod: {lastmod}")
         
         parsed = process_sitemap(sitemap_url, existing_codes, XOR_KEY, cache)
-        total_parsed += parsed
+        if parsed == 0:
+            if sitemap_url in cache.get('processed', {}):
+                skipped += 1
+        else:
+            processed += 1
+            total_parsed += parsed
     
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({
@@ -544,6 +618,8 @@ def main():
     
     logger.info("="*60)
     logger.info(f"Готово! Фильмов: {len(existing_codes)}")
+    logger.info(f"Обработано: {processed} sitemap'ов, пропущено: {skipped}")
+    logger.info(f"Новых фильмов: {total_parsed}")
     logger.info(f"Время: {(time.time()-start_time)/60:.1f} мин")
     logger.info("="*60)
 
