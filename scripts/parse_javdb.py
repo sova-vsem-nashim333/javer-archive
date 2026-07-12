@@ -226,6 +226,9 @@ def save_actress_encrypted(data: dict, filepath: str, key: str):
     encrypted = xor_encrypt_decrypt(compressed, key)
     with open(filepath, 'wb') as f:
         f.write(encrypted)
+    
+    # Коммитим после сохранения актрис
+    commit_actress_data()
 
 def load_encrypted(filepath: str, key: str) -> dict:
     if not os.path.exists(filepath):
@@ -541,6 +544,29 @@ def parse_actress_page(url_path, lastmod=None):
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
+
+# --- Коммит данных актрис ---
+
+def commit_actress_data():
+    """Коммитит только данные актрис"""
+    try:
+        subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], 
+                      check=True, capture_output=True)
+        subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], 
+                      check=True, capture_output=True)
+        
+        subprocess.run(['git', 'add', 'actress_data/'], 
+                      check=True, capture_output=True)
+        result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
+        if result.returncode != 0:
+            subprocess.run(['git', 'commit', '-m', 
+                          f'Update actresses {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], 
+                          check=True, capture_output=True)
+            subprocess.run(['git', 'pull', '--rebase'], check=True, capture_output=True)
+            subprocess.run(['git', 'push'], check=True, capture_output=True)
+            logger.info("  📤 Данные актрис закоммичены и запушены")
+    except Exception as e:
+        logger.error(f"  Ошибка коммита актрис: {e}")
 
 # --- Обработка sitemap актрис ---
 
@@ -882,7 +908,7 @@ def commit_and_push():
         subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], 
                       check=True, capture_output=True)
         
-        subprocess.run(['git', 'add', 'data/', 'actress_data/', 'metadata.json', 
+        subprocess.run(['git', 'add', 'data/', 'metadata.json', 
                        'sitemap_cache.json'], 
                       check=True, capture_output=True)
         result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
