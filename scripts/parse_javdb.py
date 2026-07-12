@@ -96,7 +96,7 @@ OLD_KEYS = {
     'f': 'films'
 }
 
-# --- Маппинг ключей для актрис (без age и debut_age) ---
+# --- Маппинг ключей для актрис (без url) ---
 ACTRESS_NEW_KEYS = {
     'name': 'n',
     'jp_name': 'jn',
@@ -112,7 +112,6 @@ ACTRESS_NEW_KEYS = {
     'hair_length': 'hl',
     'hair_color': 'hc',
     'tags': 't',
-    'url': 'u',
     'lastmod': 'lm'
 }
 
@@ -357,10 +356,78 @@ def save_month_batch(month_films_dict, key):
     
     return total
 
-# --- Парсинг актрисы (без age и debut_age) ---
+# --- Парсинг актрисы (исправленный, без url) ---
+
+def get_text_after_label(soup, label_text):
+    """
+    Ищет <b> с текстом label_text и возвращает текст после него до следующего тега или символа.
+    Для структуры вида: <b>Label:</b> value - <b>Next:</b>
+    """
+    b_tag = soup.find('b', string=lambda t: t and t.strip().startswith(label_text))
+    if not b_tag:
+        return None
+    
+    # Собираем текст между этим <b> и следующим тегом
+    result = []
+    for sibling in b_tag.next_siblings:
+        if isinstance(sibling, type(b_tag)) and sibling.name == 'b':
+            break  # Достигли следующего <b>, останавливаемся
+        if isinstance(sibling, str):
+            text = sibling.strip()
+            if text:
+                # Убираем разделители и лишние символы
+                text = text.strip(' -–\t')
+                if text:
+                    result.append(text)
+        elif hasattr(sibling, 'get_text'):
+            text = sibling.get_text(strip=True)
+            if text:
+                result.append(text)
+    
+    if result:
+        combined = ' '.join(result).strip(' -–')
+        if combined and '?' not in combined:
+            return combined
+    return None
+
+def get_text_from_link_after_label(soup, label_text):
+    """
+    Ищет <b> с текстом label_text и возвращает текст из первой ссылки после него.
+    Для структуры вида: <b>Label:</b> <a class="idol-box-link">value</a>
+    """
+    b_tag = soup.find('b', string=lambda t: t and t.strip().startswith(label_text))
+    if not b_tag:
+        return None
+    
+    link = b_tag.find_next('a', class_='idol-box-link')
+    if link:
+        text = link.get_text(strip=True)
+        if text and '?' not in text:
+            return text
+    return None
+
+def get_list_from_links_after_label(soup, label_text):
+    """
+    Ищет <b> с текстом label_text и собирает текст из всех ссылок после него.
+    Для структуры вида: <b>Label(s):</b> <a>item1</a> <a>item2</a>
+    """
+    b_tag = soup.find('b', string=lambda t: t and t.strip().startswith(label_text))
+    if not b_tag:
+        return []
+    
+    items = []
+    for sibling in b_tag.next_siblings:
+        if isinstance(sibling, type(b_tag)) and sibling.name == 'b':
+            break  # Достигли следующего <b>
+        if hasattr(sibling, 'get') and sibling.name == 'a':
+            text = sibling.get_text(strip=True)
+            if text and text != 'Suggest Tags':
+                items.append(text)
+    
+    return items
 
 def parse_actress_page(url_path, lastmod=None):
-    """Парсит страницу актрисы"""
+    """Парсит страницу актрисы (исправленная версия)"""
     for attempt in range(MAX_RETRIES):
         scraper = get_scraper()
         try:
@@ -400,122 +467,41 @@ def parse_actress_page(url_path, lastmod=None):
                     raw_name = path_parts[-1].replace('-', ' ')
                     name = raw_name.title()
             
-            # Дата рождения
-            dob = None
-            dob_b = soup.find('b', string='DOB:')
-            if dob_b:
-                dob_link = dob_b.find_next('a', class_='idol-box-link')
-                if dob_link:
-                    dob_text = dob_link.get_text(strip=True)
-                    if dob_text and '?' not in dob_text:
-                        dob = dob_text
+            # Дата рождения (из ссылки)
+            dob = get_text_from_link_after_label(soup, 'DOB:')
             
-            # Дебют
-            debut = None
-            debut_b = soup.find('b', string='Debut:')
-            if debut_b:
-                debut_link = debut_b.find_next('a', class_='idol-box-link')
-                if debut_link:
-                    debut_text = debut_link.get_text(strip=True)
-                    if debut_text and '?' not in debut_text:
-                        debut = debut_text
+            # Дебют (из ссылки)
+            debut = get_text_from_link_after_label(soup, 'Debut:')
             
-            # Место рождения
-            birthplace = None
-            bp_b = soup.find('b', string='Birthplace:')
-            if bp_b:
-                bp_text = bp_b.next_sibling
-                if bp_text:
-                    bp_text = bp_text.strip()
-                    if bp_text and '?' not in bp_text and '-' not in bp_text:
-                        birthplace = bp_text
+            # Место рождения (текст после <b>)
+            birthplace = get_text_after_label(soup, 'Birthplace:')
             
-            # Знак зодиака
-            sign = None
-            sign_b = soup.find('b', string='Sign:')
-            if sign_b:
-                sign_text = sign_b.next_sibling
-                if sign_text:
-                    sign_text = sign_text.strip()
-                    if sign_text and '?' not in sign_text and '-' not in sign_text:
-                        sign = sign_text
+            # Знак зодиака (текст после <b>)
+            sign = get_text_after_label(soup, 'Sign:')
             
-            # Группа крови
-            blood = None
-            blood_b = soup.find('b', string='Blood:')
-            if blood_b:
-                blood_text = blood_b.next_sibling
-                if blood_text:
-                    blood_text = blood_text.strip()
-                    if blood_text and '?' not in blood_text and '-' not in blood_text:
-                        blood = blood_text
+            # Группа крови (текст после <b>)
+            blood = get_text_after_label(soup, 'Blood:')
             
-            # Размеры
-            measurements = None
-            ms_b = soup.find('b', string='Measurements:')
-            if ms_b:
-                ms_text = ms_b.next_sibling
-                if ms_text:
-                    ms_text = ms_text.strip()
-                    if ms_text and '?' not in ms_text and '-' not in ms_text:
-                        measurements = ms_text
+            # Размеры (текст после <b>)
+            measurements = get_text_after_label(soup, 'Measurements:')
             
-            # Размер чашки
-            cup = None
-            cup_b = soup.find('b', string='Cup:')
-            if cup_b:
-                cup_link = cup_b.find_next('a', class_='idol-box-link')
-                if cup_link:
-                    cup_text = cup_link.get_text(strip=True)
-                    if cup_text:
-                        cup = cup_text
+            # Размер чашки (из ссылки)
+            cup = get_text_from_link_after_label(soup, 'Cup:')
             
-            # Рост
-            height = None
-            height_b = soup.find('b', string='Height:')
-            if height_b:
-                height_link = height_b.find_next('a', class_='idol-box-link')
-                if height_link:
-                    height_text = height_link.get_text(strip=True)
-                    if height_text:
-                        height = height_text
+            # Рост (из ссылки)
+            height = get_text_from_link_after_label(soup, 'Height:')
             
-            # Размер обуви
-            shoe_size = None
-            ss_b = soup.find('b', string='Shoe Size:')
-            if ss_b:
-                ss_text = ss_b.next_sibling
-                if ss_text:
-                    ss_text = ss_text.strip()
-                    if ss_text and '?' not in ss_text and '-' not in ss_text:
-                        shoe_size = ss_text
+            # Размер обуви (текст после <b>)
+            shoe_size = get_text_after_label(soup, 'Shoe Size:')
             
-            # Длина волос
-            hair_length = []
-            hl_b = soup.find('b', string='Hair Length(s):')
-            if hl_b:
-                for link in hl_b.find_next_siblings('a', class_='idol-box-link'):
-                    hl_text = link.get_text(strip=True)
-                    if hl_text:
-                        hair_length.append(hl_text)
+            # Длина волос (список из ссылок)
+            hair_length = get_list_from_links_after_label(soup, 'Hair Length(s):')
             
-            # Цвет волос
-            hair_color = []
-            hc_b = soup.find('b', string='Hair Color(s):')
-            if hc_b:
-                for link in hc_b.find_next_siblings('a', class_='idol-box-link'):
-                    hc_text = link.get_text(strip=True)
-                    if hc_text:
-                        hair_color.append(hc_text)
+            # Цвет волос (список из ссылок)
+            hair_color = get_list_from_links_after_label(soup, 'Hair Color(s):')
             
-            # Теги
-            tags = []
-            tags_b = soup.find('b', string='Tags:')
-            if tags_b:
-                for link in tags_b.find_next_siblings('a', class_='idol-box-link'):
-                    tag_text = link.get_text(strip=True)
-                    if tag_text:
-                        tags.append(tag_text)
+            # Теги (список из ссылок, исключая "Suggest Tags")
+            tags = get_list_from_links_after_label(soup, 'Tags:')
             
             actress_data = {
                 'name': name,
@@ -532,7 +518,6 @@ def parse_actress_page(url_path, lastmod=None):
                 'hair_length': hair_length,
                 'hair_color': hair_color,
                 'tags': tags,
-                'url': url_path,
                 'lastmod': lastmod
             }
             
