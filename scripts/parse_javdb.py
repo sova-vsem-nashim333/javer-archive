@@ -550,21 +550,81 @@ def parse_actress_page(url_path, lastmod=None):
 def commit_actress_data():
     """Коммитит только данные актрис"""
     try:
+        # Настраиваем git config
         subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], 
                       check=True, capture_output=True)
         subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], 
                       check=True, capture_output=True)
         
+        # Добавляем только файлы актрис
         subprocess.run(['git', 'add', 'actress_data/'], 
                       check=True, capture_output=True)
+        
+        # Проверяем, есть ли изменения
         result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
         if result.returncode != 0:
+            # Есть изменения - коммитим
             subprocess.run(['git', 'commit', '-m', 
                           f'Update actresses {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], 
                           check=True, capture_output=True)
-            subprocess.run(['git', 'pull', '--rebase'], check=True, capture_output=True)
-            subprocess.run(['git', 'push'], check=True, capture_output=True)
-            logger.info("  📤 Данные актрис закоммичены и запушены")
+            
+            # Пробуем запушить
+            try:
+                # Сначала пробуем просто push
+                push_result = subprocess.run(['git', 'push'], 
+                                           capture_output=True, text=True)
+                
+                if push_result.returncode != 0:
+                    # Если push не удался, пробуем pull с rebase
+                    logger.info("  Push не удался, пробуем pull --rebase")
+                    
+                    # Сохраняем текущие изменения
+                    subprocess.run(['git', 'fetch', 'origin'], 
+                                 check=True, capture_output=True)
+                    
+                    # Пробуем rebase
+                    rebase_result = subprocess.run(['git', 'pull', '--rebase'], 
+                                                 capture_output=True, text=True)
+                    
+                    if rebase_result.returncode != 0:
+                        # Если rebase не удался, отменяем его
+                        logger.warning(f"  Rebase не удался: {rebase_result.stderr}")
+                        subprocess.run(['git', 'rebase', '--abort'], 
+                                     capture_output=True)
+                        
+                        # Пробуем pull с merge вместо rebase
+                        merge_result = subprocess.run(['git', 'pull', '--no-rebase'], 
+                                                    capture_output=True, text=True)
+                        
+                        if merge_result.returncode != 0:
+                            logger.warning(f"  Merge тоже не удался: {merge_result.stderr}")
+                            # В крайнем случае, пробуем force push
+                            logger.info("  Пробуем force push")
+                            subprocess.run(['git', 'push', '--force-with-lease'], 
+                                         check=True, capture_output=True)
+                        else:
+                            # Merge удался, пушим
+                            subprocess.run(['git', 'push'], 
+                                         check=True, capture_output=True)
+                    else:
+                        # Rebase удался, пушим
+                        subprocess.run(['git', 'push'], 
+                                     check=True, capture_output=True)
+                
+                logger.info("  📤 Данные актрис закоммичены и запушены")
+                
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"  Push/pull не удался: {e}")
+                # В крайнем случае - force push
+                try:
+                    subprocess.run(['git', 'push', '--force-with-lease'], 
+                                 check=True, capture_output=True)
+                    logger.info("  📤 Данные актрис запушены с --force-with-lease")
+                except:
+                    logger.error(f"  Не удалось запушить даже с --force-with-lease")
+        else:
+            logger.info("  Нет изменений для коммита")
+            
     except Exception as e:
         logger.error(f"  Ошибка коммита актрис: {e}")
 
@@ -916,9 +976,45 @@ def commit_and_push():
             subprocess.run(['git', 'commit', '-m', 
                           f'Update {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], 
                           check=True, capture_output=True)
-            subprocess.run(['git', 'pull', '--rebase'], check=True, capture_output=True)
-            subprocess.run(['git', 'push'], check=True, capture_output=True)
-            logger.info("  📤 Закоммичено и запушено")
+            
+            # Пробуем push с fallback-стратегией
+            try:
+                push_result = subprocess.run(['git', 'push'], 
+                                           capture_output=True, text=True)
+                
+                if push_result.returncode != 0:
+                    logger.info("  Push не удался, пробуем pull --rebase")
+                    subprocess.run(['git', 'fetch', 'origin'], check=True, capture_output=True)
+                    
+                    rebase_result = subprocess.run(['git', 'pull', '--rebase'], 
+                                                 capture_output=True, text=True)
+                    
+                    if rebase_result.returncode != 0:
+                        logger.warning(f"  Rebase не удался: {rebase_result.stderr}")
+                        subprocess.run(['git', 'rebase', '--abort'], capture_output=True)
+                        
+                        merge_result = subprocess.run(['git', 'pull', '--no-rebase'], 
+                                                    capture_output=True, text=True)
+                        
+                        if merge_result.returncode != 0:
+                            logger.warning(f"  Merge не удался: {merge_result.stderr}")
+                            subprocess.run(['git', 'push', '--force-with-lease'], 
+                                         check=True, capture_output=True)
+                        else:
+                            subprocess.run(['git', 'push'], check=True, capture_output=True)
+                    else:
+                        subprocess.run(['git', 'push'], check=True, capture_output=True)
+                
+                logger.info("  📤 Закоммичено и запушено")
+                
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"  Push/pull не удался: {e}")
+                try:
+                    subprocess.run(['git', 'push', '--force-with-lease'], 
+                                 check=True, capture_output=True)
+                    logger.info("  📤 Запушено с --force-with-lease")
+                except:
+                    logger.error(f"  Не удалось запушить даже с --force-with-lease")
     except Exception as e:
         logger.error(f"  Ошибка коммита: {e}")
 
