@@ -33,6 +33,7 @@ BASE_URL = "https://www.javdatabase.com"
 SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 CACHE_FILE = "sitemap_cache.json"
 DATA_DIR = "data"
+MOVIES_FILE = os.path.join(DATA_DIR, "movies.bin")  # Единый файл для всех фильмов
 METADATA_FILE = "metadata.json"
 ACTRESS_DATA_DIR = "actress_data"
 ACTRESS_FILE = os.path.join(ACTRESS_DATA_DIR, "actress.bin")
@@ -57,6 +58,7 @@ MAX_RETRIES = 2
 existing_codes_lock = Lock()
 cache_lock = Lock()
 actress_lock = Lock()
+movies_lock = Lock()  # Блокировка для единого файла фильмов
 
 # Пул scraper'ов
 scraper_pool = queue.Queue(maxsize=POOL_SIZE)
@@ -313,48 +315,27 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
 # --- Кэш и сохранение ---
 
 def load_existing_codes(key):
+    """Загружает существующие коды фильмов из единого файла movies.bin"""
     codes = set()
-    if os.path.exists(DATA_DIR):
-        for f in os.listdir(DATA_DIR):
-            if f.endswith('.bin'):
-                data = load_encrypted(os.path.join(DATA_DIR, f), key)
-                if data:
-                    for film in data.get('films', []):
-                        codes.add(film['code'])
+    data = load_encrypted(MOVIES_FILE, key)
+    if data:
+        for film in data.get('films', []):
+            codes.add(film['code'])
     return codes
 
-def save_month_batch(month_films_dict, key):
-    total = 0
-    for month, films in month_films_dict.items():
-        filepath = os.path.join(DATA_DIR, f"{month}.bin")
-        
-        existing = load_encrypted(filepath, key)
-        existing_films = existing.get('films', []) if existing else []
-        
-        codes = {f['code'] for f in existing_films}
-        new = [f for f in films if f['code'] not in codes]
-        
-        if not new:
-            continue
-        
-        all_films = existing_films + new
-        
-        data = {
-            "films": all_films,
-            "metadata": {
-                "version": "1.0.0",
-                "generatedAt": datetime.now(timezone.utc).isoformat(),
-                "month": month,
-                "totalFilms": len(all_films)
-            }
+def save_all_movies(all_films, key):
+    """Сохраняет все фильмы в единый файл movies.bin"""
+    data = {
+        "films": all_films,
+        "metadata": {
+            "version": "1.0.0",
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "totalFilms": len(all_films)
         }
-        
-        save_encrypted(data, filepath, key)
-        saved = len(new)
-        total += saved
-        logger.info(f"  💾 {month}.bin: +{saved} фильмов (всего {len(all_films)})")
+    }
     
-    return total
+    save_encrypted(data, MOVIES_FILE, key)
+    logger.info(f"  💾 movies.bin: всего {len(all_films)} фильмов")
 
 # --- Парсинг актрисы (исправленный, без url) ---
 
@@ -480,7 +461,6 @@ def parse_actress_page(url_path, lastmod=None):
             tags = []
             
             # Находим все <b> теги в информационном блоке
-            # Ищем div с классом col-12 col-xxl-7... который содержит информацию
             info_div = soup.find('div', class_='col-12')
             
             if info_div:
@@ -493,7 +473,6 @@ def parse_actress_page(url_path, lastmod=None):
                         continue  # Пропускаем Age
                     
                     elif b_text == 'DOB':
-                        # DOB - это ссылка сразу после <b>DOB:</b>
                         dob_link = b_tag.find_next('a', class_='idol-box-link')
                         if dob_link:
                             text = dob_link.get_text(strip=True)
@@ -501,7 +480,6 @@ def parse_actress_page(url_path, lastmod=None):
                                 dob = text
                     
                     elif b_text == 'Debut':
-                        # Debut - это ссылка после <b>Debut:</b>
                         debut_link = b_tag.find_next('a', class_='idol-box-link')
                         if debut_link:
                             text = debut_link.get_text(strip=True)
@@ -512,7 +490,6 @@ def parse_actress_page(url_path, lastmod=None):
                         continue  # Пропускаем Debut Age
                     
                     elif b_text == 'Birthplace':
-                        # Текст после <b>Birthplace:</b> до следующего тега
                         text = get_text_after_b(b_tag)
                         if text and '?' not in text:
                             birthplace = text
@@ -533,7 +510,6 @@ def parse_actress_page(url_path, lastmod=None):
                             measurements = text
                     
                     elif b_text == 'Cup':
-                        # Cup - это ссылка
                         cup_link = b_tag.find_next('a', class_='idol-box-link')
                         if cup_link:
                             text = cup_link.get_text(strip=True)
@@ -541,7 +517,6 @@ def parse_actress_page(url_path, lastmod=None):
                                 cup = text
                     
                     elif b_text == 'Height':
-                        # Height - это ссылка
                         height_link = b_tag.find_next('a', class_='idol-box-link')
                         if height_link:
                             text = height_link.get_text(strip=True)
@@ -554,14 +529,12 @@ def parse_actress_page(url_path, lastmod=None):
                             shoe_size = text
                     
                     elif b_text == 'Hair Length(s)':
-                        # Собираем ссылки до следующего <b> или <p>
                         hair_length = get_links_after_b(b_tag)
                     
                     elif b_text == 'Hair Color(s)':
                         hair_color = get_links_after_b(b_tag)
                     
                     elif b_text == 'Tags':
-                        # Теги - ссылки, но исключаем "Suggest Tags"
                         tags = get_links_after_b(b_tag, exclude_btn=True)
             
             actress_data = {
@@ -595,26 +568,21 @@ def parse_actress_page(url_path, lastmod=None):
 def get_text_after_b(b_tag):
     """
     Получает текст после <b> тега до следующего тега (учитывая разделители).
-    Структура: <b>Label:</b> value - <b>Next:</b> или <b>Label:</b> value <br>
     """
     result_parts = []
     current = b_tag.next_sibling
     
     while current:
-        # Останавливаемся если встретили следующий <b> тег или <br>
         if hasattr(current, 'name'):
             if current.name in ('b', 'br', 'p'):
                 break
-            # Пропускаем ссылки (они обрабатываются отдельно)
             if current.name == 'a':
                 current = current.next_sibling
                 continue
         
         if isinstance(current, str):
             text = current.strip()
-            # Убираем разделители " - "
             if text and text != '-':
-                # Убираем ведущие и завершающие дефисы
                 text = text.strip(' -–\t')
                 if text:
                     result_parts.append(text)
@@ -630,7 +598,6 @@ def get_text_after_b(b_tag):
 def get_links_after_b(b_tag, exclude_btn=False):
     """
     Собирает текст из ссылок после <b> тега до следующего структурного тега.
-    exclude_btn - исключать ссылки с классом btn (например "Suggest Tags")
     """
     items = []
     current = b_tag.next_sibling
@@ -641,7 +608,6 @@ def get_links_after_b(b_tag, exclude_btn=False):
                 break
             
             if current.name == 'a':
-                # Проверяем, не кнопка ли это
                 classes = current.get('class', [])
                 if exclude_btn and 'btn' in classes:
                     break
@@ -683,7 +649,6 @@ def process_actress_sitemap(sitemap_url, key, cache):
             if loc is not None and '/idols/' in loc.text:
                 lastmod_text = lastmod.text if lastmod is not None else None
                 
-                # Проверяем, нужно ли парсить
                 actress_url = loc.text
                 if actress_url in cache.get('processed_actresses', {}):
                     cached_time_str = cache['processed_actresses'][actress_url]
@@ -722,7 +687,6 @@ def process_actress_sitemap(sitemap_url, key, cache):
                     actress = future.result(timeout=60)
                     
                     if actress and actress['name']:
-                        # Используем имя как ключ
                         name_key = actress['name'].lower()
                         
                         with actress_lock:
@@ -877,8 +841,8 @@ def parse_film_page(url_path):
 
 # --- Обработка sitemap ---
 
-def process_sitemap(sitemap_url, existing_codes, key, cache):
-    """Обрабатывает sitemap только если он изменился (по lastmod)"""
+def process_sitemap(sitemap_url, existing_codes, all_films, key, cache):
+    """Обрабатывает sitemap и добавляет фильмы в общий список"""
     
     sitemap_lastmod = cache.get('sitemap_index_data', {}).get(sitemap_url)
     
@@ -933,7 +897,7 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
             return 0
         
         parsed_count = 0
-        films_by_month = defaultdict(list)
+        new_films = []
         
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             future_to_url = {executor.submit(parse_film_page, path): path for path in urls}
@@ -946,11 +910,9 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
                     film = future.result(timeout=60)
                     
                     if film:
-                        month = film['releaseDate'][:7]
-                        
                         with existing_codes_lock:
                             existing_codes.add(code)
-                            films_by_month[month].append(film)
+                            new_films.append(film)
                             parsed_count += 1
                         
                         logger.info(f"    ✓ {film['code']}: {film['title'][:50]}")
@@ -963,8 +925,10 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
                 except Exception as e:
                     logger.error(f"    ✗ {code}: {e}")
         
-        if films_by_month:
-            save_month_batch(films_by_month, key)
+        # Добавляем новые фильмы в общий список
+        if new_films:
+            with movies_lock:
+                all_films.extend(new_films)
         
         with cache_lock:
             if 'processed' not in cache:
@@ -972,14 +936,6 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
             cache['processed'][sitemap_url] = datetime.now(timezone.utc).isoformat()
             with open(CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache, f, indent=2)
-        
-        with open(METADATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump({
-                "lastUpdate": datetime.now(timezone.utc).isoformat(),
-                "totalFilms": len(existing_codes)
-            }, f, ensure_ascii=False, indent=2)
-        
-        commit_and_push()
         
         return parsed_count
         
@@ -1005,7 +961,6 @@ def commit_and_push():
                           f'Update {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], 
                           check=True, capture_output=True)
             
-            # Безопасный pull с обработкой конфликтов
             try:
                 subprocess.run(['git', 'pull', '--rebase'], 
                              check=True, capture_output=True)
@@ -1032,7 +987,7 @@ def main():
     
     init_scraper_pool(POOL_SIZE)
     
-    # Загружаем sitemap index для получения ВСЕХ sitemap (и фильмы, и актрисы)
+    # Загружаем sitemap index
     scraper = get_scraper()
     try:
         logger.info(f"Загрузка sitemap-индекса: {SITEMAP_INDEX_URL}")
@@ -1108,6 +1063,12 @@ def main():
     existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
     
+    # Загружаем существующие фильмы в общий список
+    all_films = []
+    existing_data = load_encrypted(MOVIES_FILE, XOR_KEY)
+    if existing_data:
+        all_films = existing_data.get('films', [])
+    
     total_parsed = 0
     skipped = 0
     processed = 0
@@ -1117,13 +1078,17 @@ def main():
         if lastmod:
             logger.info(f"  lastmod: {lastmod}")
         
-        parsed = process_sitemap(sitemap_url, existing_codes, XOR_KEY, cache)
+        parsed = process_sitemap(sitemap_url, existing_codes, all_films, XOR_KEY, cache)
         if parsed == 0:
             if sitemap_url in cache.get('processed', {}):
                 skipped += 1
         else:
             processed += 1
             total_parsed += parsed
+    
+    # Сохраняем все фильмы в единый файл
+    if total_parsed > 0:
+        save_all_movies(all_films, XOR_KEY)
     
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({
