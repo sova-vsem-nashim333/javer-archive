@@ -61,6 +61,16 @@ jobs:
               except:
                   return False
           
+          def count_films(data):
+              # Ищем films в разных форматах
+              films = data.get('films') or data.get('f') or []
+              # Может быть словарь с ключом f внутри metadata
+              if not films and isinstance(data.get('metadata'), dict):
+                  films = data['metadata'].get('films') or data['metadata'].get('f') or []
+              if isinstance(films, list):
+                  return len(films)
+              return 0
+          
           files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.bin')])
           print(f'Найдено {len(files)} файлов')
           
@@ -69,22 +79,31 @@ jobs:
               filepath = os.path.join(DATA_DIR, f)
               
               if is_new_format(filepath, XOR_KEY):
-                  print(f'  {f}: уже в новом формате')
+                  # Проверяем что в новом формате данные читаются
+                  with open(filepath, 'rb') as fh:
+                      encrypted = fh.read()
+                  compressed = xor_encrypt_decrypt(encrypted, XOR_KEY)
+                  msgpack_bytes = gzip.decompress(compressed)
+                  data = msgpack.unpackb(msgpack_bytes)
+                  n = count_films(data)
+                  print(f'  {f}: уже в новом формате ({n} фильмов)')
                   continue
               
               try:
                   data = load_old(filepath, XOR_KEY)
+                  n = count_films(data)
                   save_new(data, filepath, XOR_KEY)
                   
-                  old_size = os.path.getsize(filepath)
-                  films = len(data.get('films', []))
-                  print(f'  {f}: ✅ мигрирован ({films} фильмов, {old_size:,} байт)')
+                  new_size = os.path.getsize(filepath)
+                  print(f'  {f}: ✅ мигрирован ({n} фильмов, {new_size:,} байт)')
                   migrated += 1
               except Exception as e:
                   print(f'  {f}: ❌ ошибка - {e}')
+                  import traceback
+                  traceback.print_exc()
           
           print(f'\nМигрировано: {migrated}')
-          "    
+          "
       
       - name: Commit and push
         run: |
