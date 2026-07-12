@@ -34,6 +34,8 @@ SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 CACHE_FILE = "sitemap_cache.json"
 DATA_DIR = "data"
 METADATA_FILE = "metadata.json"
+ACTRESS_DATA_DIR = "actress_data"
+ACTRESS_FILE = os.path.join(ACTRESS_DATA_DIR, "actress.bin")
 
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '2'))
 POOL_SIZE = MAX_WORKERS + 2
@@ -54,6 +56,7 @@ MAX_RETRIES = 2
 # Блокировки
 existing_codes_lock = Lock()
 cache_lock = Lock()
+actress_lock = Lock()
 
 # Пул scraper'ов
 scraper_pool = queue.Queue(maxsize=POOL_SIZE)
@@ -93,6 +96,28 @@ OLD_KEYS = {
     'f': 'films'
 }
 
+# --- Маппинг ключей для актрис (без age и debut_age) ---
+ACTRESS_NEW_KEYS = {
+    'name': 'n',
+    'jp_name': 'jn',
+    'dob': 'd',
+    'debut': 'db',
+    'birthplace': 'bp',
+    'sign': 's',
+    'blood': 'b',
+    'measurements': 'ms',
+    'cup': 'c',
+    'height': 'h',
+    'shoe_size': 'ss',
+    'hair_length': 'hl',
+    'hair_color': 'hc',
+    'tags': 't',
+    'url': 'u',
+    'lastmod': 'lm'
+}
+
+ACTRESS_OLD_KEYS = {v: k for k, v in ACTRESS_NEW_KEYS.items()}
+
 def minify_json(data):
     """Минифицирует JSON для сохранения (без description)"""
     if isinstance(data, dict):
@@ -109,20 +134,47 @@ def minify_json(data):
         return [minify_json(item) for item in data]
     return data
 
+def minify_actress_json(data):
+    """Минифицирует JSON актрисы"""
+    if isinstance(data, dict):
+        result = {}
+        for k, v in data.items():
+            new_key = ACTRESS_NEW_KEYS.get(k, k)
+            if isinstance(v, (dict, list)):
+                result[new_key] = minify_actress_json(v)
+            else:
+                result[new_key] = v
+        return result
+    elif isinstance(data, list):
+        return [minify_actress_json(item) for item in data]
+    return data
+
 def normalize_json(data):
     """Нормализует JSON после загрузки (поддерживает и старые и новые ключи)"""
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
-            # Пробуем найти в старых сокращенных ключах
             if k in OLD_KEYS:
                 result[OLD_KEYS[k]] = normalize_json(v)
             else:
-                # Или оставляем как есть (для полных ключей из старых данных)
                 result[k] = normalize_json(v)
         return result
     elif isinstance(data, list):
         return [normalize_json(item) for item in data]
+    return data
+
+def normalize_actress_json(data):
+    """Нормализует JSON актрисы после загрузки"""
+    if isinstance(data, dict):
+        result = {}
+        for k, v in data.items():
+            if k in ACTRESS_OLD_KEYS:
+                result[ACTRESS_OLD_KEYS[k]] = normalize_actress_json(v)
+            else:
+                result[k] = normalize_actress_json(v)
+        return result
+    elif isinstance(data, list):
+        return [normalize_actress_json(item) for item in data]
     return data
 
 def parse_datetime(date_str):
@@ -130,12 +182,11 @@ def parse_datetime(date_str):
     if not date_str:
         return None
     
-    # Форматы дат, которые могут встретиться
     formats = [
-        '%Y-%m-%dT%H:%M:%S%z',  # 2026-07-11T15:36:08+00:00
-        '%Y-%m-%dT%H:%M:%S+00:00',  # без двоеточия в timezone
-        '%Y-%m-%dT%H:%M:%SZ',  # UTC формат
-        '%Y-%m-%d %H:%M:%S',  # простой формат
+        '%Y-%m-%dT%H:%M:%S%z',
+        '%Y-%m-%dT%H:%M:%S+00:00',
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S',
     ]
     
     for fmt in formats:
@@ -144,7 +195,6 @@ def parse_datetime(date_str):
         except:
             continue
     
-    # Пробуем ISO format как запасной вариант
     try:
         return datetime.fromisoformat(date_str)
     except:
@@ -161,9 +211,16 @@ def xor_encrypt_decrypt(data: bytes, key: str) -> bytes:
 
 def save_encrypted(data: dict, filepath: str, key: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    # Минифицируем перед сохранением
     minified = minify_json(data)
-    # msgpack → gzip → xor
+    msgpack_bytes = msgpack.packb(minified)
+    compressed = gzip.compress(msgpack_bytes, compresslevel=9)
+    encrypted = xor_encrypt_decrypt(compressed, key)
+    with open(filepath, 'wb') as f:
+        f.write(encrypted)
+
+def save_actress_encrypted(data: dict, filepath: str, key: str):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    minified = minify_actress_json(data)
     msgpack_bytes = msgpack.packb(minified)
     compressed = gzip.compress(msgpack_bytes, compresslevel=9)
     encrypted = xor_encrypt_decrypt(compressed, key)
@@ -178,8 +235,17 @@ def load_encrypted(filepath: str, key: str) -> dict:
     compressed = xor_encrypt_decrypt(encrypted, key)
     msgpack_bytes = gzip.decompress(compressed)
     data = msgpack.unpackb(msgpack_bytes)
-    # Нормализуем (поддерживает старые и новые форматы)
     return normalize_json(data)
+
+def load_actress_encrypted(filepath: str, key: str) -> dict:
+    if not os.path.exists(filepath):
+        return None
+    with open(filepath, 'rb') as f:
+        encrypted = f.read()
+    compressed = xor_encrypt_decrypt(encrypted, key)
+    msgpack_bytes = gzip.decompress(compressed)
+    data = msgpack.unpackb(msgpack_bytes)
+    return normalize_actress_json(data)
 
 # --- Scraper pool ---
 
@@ -287,6 +353,308 @@ def save_month_batch(month_films_dict, key):
         logger.info(f"  💾 {month}.bin: +{saved} фильмов (всего {len(all_films)})")
     
     return total
+
+# --- Парсинг актрисы (без age и debut_age) ---
+
+def parse_actress_page(url_path, lastmod=None):
+    """Парсит страницу актрисы"""
+    for attempt in range(MAX_RETRIES):
+        scraper = get_scraper()
+        try:
+            full_url = urljoin(BASE_URL, url_path)
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            resp = fetch_with_retry(scraper, full_url)
+            if not resp:
+                if attempt < MAX_RETRIES - 1:
+                    logger.warning(f"    Попытка {attempt+1} не удалась")
+                    continue
+                return None
+            
+            if resp.encoding == 'ISO-8859-1':
+                resp.encoding = 'utf-8'
+            
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Имя
+            name = None
+            jp_name = None
+            
+            h1 = soup.find('h1', class_='idol-name')
+            if h1:
+                name_text = h1.get_text(strip=True)
+                # Убираем " - JAV Profile"
+                name = name_text.replace(' - JAV Profile', '').strip()
+            
+            # Японское имя
+            jp_elem = soup.find('b', string='JP:')
+            if jp_elem and jp_elem.next_sibling:
+                jp_name = jp_elem.next_sibling.strip()
+            
+            if not name:
+                path_parts = url_path.strip('/').split('/')
+                if len(path_parts) >= 2 and path_parts[-2] == 'idols':
+                    raw_name = path_parts[-1].replace('-', ' ')
+                    name = raw_name.title()
+            
+            # Дата рождения
+            dob = None
+            dob_b = soup.find('b', string='DOB:')
+            if dob_b:
+                dob_link = dob_b.find_next('a', class_='idol-box-link')
+                if dob_link:
+                    dob_text = dob_link.get_text(strip=True)
+                    if dob_text and '?' not in dob_text:
+                        dob = dob_text
+            
+            # Дебют
+            debut = None
+            debut_b = soup.find('b', string='Debut:')
+            if debut_b:
+                debut_link = debut_b.find_next('a', class_='idol-box-link')
+                if debut_link:
+                    debut_text = debut_link.get_text(strip=True)
+                    if debut_text and '?' not in debut_text:
+                        debut = debut_text
+            
+            # Место рождения
+            birthplace = None
+            bp_b = soup.find('b', string='Birthplace:')
+            if bp_b:
+                bp_text = bp_b.next_sibling
+                if bp_text:
+                    bp_text = bp_text.strip()
+                    if bp_text and '?' not in bp_text and '-' not in bp_text:
+                        birthplace = bp_text
+            
+            # Знак зодиака
+            sign = None
+            sign_b = soup.find('b', string='Sign:')
+            if sign_b:
+                sign_text = sign_b.next_sibling
+                if sign_text:
+                    sign_text = sign_text.strip()
+                    if sign_text and '?' not in sign_text and '-' not in sign_text:
+                        sign = sign_text
+            
+            # Группа крови
+            blood = None
+            blood_b = soup.find('b', string='Blood:')
+            if blood_b:
+                blood_text = blood_b.next_sibling
+                if blood_text:
+                    blood_text = blood_text.strip()
+                    if blood_text and '?' not in blood_text and '-' not in blood_text:
+                        blood = blood_text
+            
+            # Размеры
+            measurements = None
+            ms_b = soup.find('b', string='Measurements:')
+            if ms_b:
+                ms_text = ms_b.next_sibling
+                if ms_text:
+                    ms_text = ms_text.strip()
+                    if ms_text and '?' not in ms_text and '-' not in ms_text:
+                        measurements = ms_text
+            
+            # Размер чашки
+            cup = None
+            cup_b = soup.find('b', string='Cup:')
+            if cup_b:
+                cup_link = cup_b.find_next('a', class_='idol-box-link')
+                if cup_link:
+                    cup_text = cup_link.get_text(strip=True)
+                    if cup_text:
+                        cup = cup_text
+            
+            # Рост
+            height = None
+            height_b = soup.find('b', string='Height:')
+            if height_b:
+                height_link = height_b.find_next('a', class_='idol-box-link')
+                if height_link:
+                    height_text = height_link.get_text(strip=True)
+                    if height_text:
+                        height = height_text
+            
+            # Размер обуви
+            shoe_size = None
+            ss_b = soup.find('b', string='Shoe Size:')
+            if ss_b:
+                ss_text = ss_b.next_sibling
+                if ss_text:
+                    ss_text = ss_text.strip()
+                    if ss_text and '?' not in ss_text and '-' not in ss_text:
+                        shoe_size = ss_text
+            
+            # Длина волос
+            hair_length = []
+            hl_b = soup.find('b', string='Hair Length(s):')
+            if hl_b:
+                for link in hl_b.find_next_siblings('a', class_='idol-box-link'):
+                    hl_text = link.get_text(strip=True)
+                    if hl_text:
+                        hair_length.append(hl_text)
+            
+            # Цвет волос
+            hair_color = []
+            hc_b = soup.find('b', string='Hair Color(s):')
+            if hc_b:
+                for link in hc_b.find_next_siblings('a', class_='idol-box-link'):
+                    hc_text = link.get_text(strip=True)
+                    if hc_text:
+                        hair_color.append(hc_text)
+            
+            # Теги
+            tags = []
+            tags_b = soup.find('b', string='Tags:')
+            if tags_b:
+                for link in tags_b.find_next_siblings('a', class_='idol-box-link'):
+                    tag_text = link.get_text(strip=True)
+                    if tag_text:
+                        tags.append(tag_text)
+            
+            actress_data = {
+                'name': name,
+                'jp_name': jp_name,
+                'dob': dob,
+                'debut': debut,
+                'birthplace': birthplace,
+                'sign': sign,
+                'blood': blood,
+                'measurements': measurements,
+                'cup': cup,
+                'height': height,
+                'shoe_size': shoe_size,
+                'hair_length': hair_length,
+                'hair_color': hair_color,
+                'tags': tags,
+                'url': url_path,
+                'lastmod': lastmod
+            }
+            
+            return_scraper(scraper)
+            return actress_data
+            
+        except Exception as e:
+            logger.error(f"    Ошибка парсинга актрисы: {e}")
+            if attempt < MAX_RETRIES - 1:
+                continue
+            return None
+
+# --- Обработка sitemap актрис ---
+
+def process_actress_sitemap(sitemap_url, key, cache):
+    """Обрабатывает sitemap актрис"""
+    
+    logger.info(f"  Загрузка sitemap актрис: {sitemap_url}")
+    
+    scraper = get_scraper()
+    try:
+        time.sleep(random.uniform(1, 2))
+        resp = fetch_with_retry(scraper, sitemap_url)
+    finally:
+        return_scraper(scraper)
+    
+    if not resp:
+        return 0
+    
+    try:
+        root = ET.fromstring(resp.content)
+        ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+        
+        urls = []
+        for url in root.findall('sm:url', ns):
+            loc = url.find('sm:loc', ns)
+            lastmod = url.find('sm:lastmod', ns)
+            
+            if loc is not None and '/idols/' in loc.text:
+                lastmod_text = lastmod.text if lastmod is not None else None
+                
+                # Проверяем, нужно ли парсить
+                actress_url = loc.text
+                if actress_url in cache.get('processed_actresses', {}):
+                    cached_time_str = cache['processed_actresses'][actress_url]
+                    if lastmod_text and cached_time_str:
+                        sitemap_time = parse_datetime(lastmod_text)
+                        cached_time = parse_datetime(cached_time_str)
+                        
+                        if sitemap_time and cached_time and sitemap_time <= cached_time:
+                            continue  # Пропускаем, не изменилось
+                
+                urls.append((loc.text, lastmod_text))
+        
+        logger.info(f"  Новых/обновленных актрис: {len(urls)}")
+        
+        if not urls:
+            return 0
+        
+        # Загружаем существующие данные актрис
+        existing_actresses = {}
+        actress_data_file = load_actress_encrypted(ACTRESS_FILE, key)
+        if actress_data_file:
+            existing_actresses = actress_data_file.get('actresses', {})
+        
+        parsed_count = 0
+        
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_url = {
+                executor.submit(parse_actress_page, urlparse(full_url).path, lastmod): full_url 
+                for full_url, lastmod in urls
+            }
+            
+            for future in as_completed(future_to_url):
+                full_url = future_to_url[future]
+                
+                try:
+                    actress = future.result(timeout=60)
+                    
+                    if actress and actress['name']:
+                        # Используем имя как ключ
+                        name_key = actress['name'].lower()
+                        
+                        with actress_lock:
+                            existing_actresses[name_key] = actress
+                            parsed_count += 1
+                        
+                        logger.info(f"    ✓ {actress['name']}")
+                    else:
+                        logger.warning(f"    ✗ {full_url}")
+                        
+                except FuturesTimeoutError:
+                    logger.error(f"    ⏰ Таймаут 60с: {full_url}")
+                    future.cancel()
+                except Exception as e:
+                    logger.error(f"    ✗ {full_url}: {e}")
+        
+        # Сохраняем актрис
+        if parsed_count > 0:
+            actress_data = {
+                'actresses': existing_actresses,
+                'metadata': {
+                    'version': '1.0.0',
+                    'generatedAt': datetime.now(timezone.utc).isoformat(),
+                    'totalActresses': len(existing_actresses)
+                }
+            }
+            save_actress_encrypted(actress_data, ACTRESS_FILE, key)
+            logger.info(f"  💾 Сохранено {parsed_count} актрис (всего {len(existing_actresses)})")
+        
+        # Обновляем кэш
+        with cache_lock:
+            if 'processed_actresses' not in cache:
+                cache['processed_actresses'] = {}
+            for full_url, _ in urls:
+                cache['processed_actresses'][full_url] = datetime.now(timezone.utc).isoformat()
+            
+            with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cache, f, indent=2)
+        
+        return parsed_count
+        
+    except Exception as e:
+        logger.error(f"  Ошибка обработки sitemap актрис: {e}")
+        return 0
 
 # --- Парсинг фильма (БЕЗ description) ---
 
@@ -400,10 +768,8 @@ def parse_film_page(url_path):
 def process_sitemap(sitemap_url, existing_codes, key, cache):
     """Обрабатывает sitemap только если он изменился (по lastmod)"""
     
-    # Получаем lastmod из sitemap_index.xml
     sitemap_lastmod = cache.get('sitemap_index_data', {}).get(sitemap_url)
     
-    # Проверяем, нужно ли обрабатывать
     if sitemap_url in cache.get('processed', {}):
         cached_time_str = cache['processed'][sitemap_url]
         if sitemap_lastmod and cached_time_str:
@@ -411,7 +777,6 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
             cached_time = parse_datetime(cached_time_str)
             
             if sitemap_time and cached_time:
-                # Если lastmod не новее кэшированного времени - пропускаем
                 if sitemap_time <= cached_time:
                     logger.info(f"  Пропуск (не изменился): {sitemap_url}")
                     logger.info(f"    lastmod: {sitemap_lastmod}, кэш: {cached_time_str}")
@@ -449,14 +814,12 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
         logger.info(f"  Новых URL: {len(urls)}")
         
         if not urls:
-            # Даже если нет новых URL, обновляем кэш
             with cache_lock:
                 if 'processed' not in cache:
                     cache['processed'] = {}
                 cache['processed'][sitemap_url] = datetime.now(timezone.utc).isoformat()
             return 0
         
-        # Многопоточный парсинг
         parsed_count = 0
         films_by_month = defaultdict(list)
         
@@ -488,11 +851,9 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
                 except Exception as e:
                     logger.error(f"    ✗ {code}: {e}")
         
-        # Сохраняем
         if films_by_month:
             save_month_batch(films_by_month, key)
         
-        # Кэш
         with cache_lock:
             if 'processed' not in cache:
                 cache['processed'] = {}
@@ -500,14 +861,12 @@ def process_sitemap(sitemap_url, existing_codes, key, cache):
             with open(CACHE_FILE, 'w', encoding='utf-8') as f:
                 json.dump(cache, f, indent=2)
         
-        # Метаданные
         with open(METADATA_FILE, 'w', encoding='utf-8') as f:
             json.dump({
                 "lastUpdate": datetime.now(timezone.utc).isoformat(),
                 "totalFilms": len(existing_codes)
             }, f, ensure_ascii=False, indent=2)
         
-        # Коммит
         commit_and_push()
         
         return parsed_count
@@ -523,7 +882,8 @@ def commit_and_push():
         subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], 
                       check=True, capture_output=True)
         
-        subprocess.run(['git', 'add', 'data/', 'metadata.json', 'sitemap_cache.json'], 
+        subprocess.run(['git', 'add', 'data/', 'actress_data/', 'metadata.json', 
+                       'sitemap_cache.json'], 
                       check=True, capture_output=True)
         result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
         if result.returncode != 0:
@@ -546,6 +906,7 @@ def main():
     
     init_scraper_pool(POOL_SIZE)
     
+    # Загружаем sitemap index для получения ВСЕХ sitemap (и фильмы, и актрисы)
     scraper = get_scraper()
     try:
         logger.info(f"Загрузка sitemap-индекса: {SITEMAP_INDEX_URL}")
@@ -560,39 +921,63 @@ def main():
     root = ET.fromstring(resp.content)
     ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
     
-    # Извлекаем sitemap с их lastmod
+    # Разделяем sitemap на фильмы и актрис
     movie_sitemaps = {}
+    actress_sitemaps = {}
     sitemap_index_data = {}
     
     for sitemap in root.findall('sm:sitemap', ns):
         loc = sitemap.find('sm:loc', ns)
         lastmod = sitemap.find('sm:lastmod', ns)
         
-        if loc is not None and 'movies-sitemap' in loc.text:
+        if loc is not None:
             lastmod_text = lastmod.text if lastmod is not None else None
-            movie_sitemaps[loc.text] = lastmod_text
             sitemap_index_data[loc.text] = lastmod_text
+            
+            if 'movies-sitemap' in loc.text:
+                movie_sitemaps[loc.text] = lastmod_text
+            elif 'idols-sitemap' in loc.text:
+                actress_sitemaps[loc.text] = lastmod_text
     
-    logger.info(f"Найдено {len(movie_sitemaps)} movies-sitemap файлов")
+    logger.info(f"Найдено: {len(movie_sitemaps)} movies-sitemap, {len(actress_sitemaps)} idols-sitemap")
     
-    # Загружаем кэш
+    # Загружаем общий кэш
     cache = {}
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 cache = json.load(f)
-            logger.info(f"Кэш загружен, обработано sitemap'ов: {len(cache.get('processed', {}))}")
+            logger.info(f"Кэш загружен")
         except:
-            cache = {'processed': {}, 'sitemap_index_data': {}}
+            cache = {'processed': {}, 'processed_actresses': {}, 'sitemap_index_data': {}}
     else:
-        cache = {'processed': {}, 'sitemap_index_data': {}}
+        cache = {'processed': {}, 'processed_actresses': {}, 'sitemap_index_data': {}}
     
-    # Обновляем данные sitemap_index в кэше
     cache['sitemap_index_data'] = sitemap_index_data
     
-    # Сохраняем обновленный кэш с новыми данными индекса
     with open(CACHE_FILE, 'w', encoding='utf-8') as f:
         json.dump(cache, f, indent=2)
+    
+    # --- Парсинг актрис ---
+    logger.info("\n" + "="*60)
+    logger.info("ПАРСИНГ АКТРИС")
+    logger.info("="*60)
+    
+    total_actresses = 0
+    for i, (sitemap_url, lastmod) in enumerate(actress_sitemaps.items(), 1):
+        logger.info(f"[{i}/{len(actress_sitemaps)}] {sitemap_url}")
+        if lastmod:
+            logger.info(f"  lastmod: {lastmod}")
+        
+        parsed = process_actress_sitemap(sitemap_url, XOR_KEY, cache)
+        total_actresses += parsed
+    
+    logger.info(f"Всего обработано актрис: {total_actresses}")
+    
+    # --- Парсинг фильмов ---
+    logger.info("\n" + "="*60)
+    logger.info("ПАРСИНГ ФИЛЬМОВ")
+    logger.info("="*60)
     
     existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
@@ -617,14 +1002,16 @@ def main():
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump({
             "lastUpdate": datetime.now(timezone.utc).isoformat(),
-            "totalFilms": len(existing_codes)
+            "totalFilms": len(existing_codes),
+            "totalActresses": total_actresses
         }, f, ensure_ascii=False, indent=2)
     
     commit_and_push()
     
     logger.info("="*60)
     logger.info(f"Готово! Фильмов: {len(existing_codes)}")
-    logger.info(f"Обработано: {processed} sitemap'ов, пропущено: {skipped}")
+    logger.info(f"Актрис обработано: {total_actresses}")
+    logger.info(f"Обработано sitemap'ов фильмов: {processed}, пропущено: {skipped}")
     logger.info(f"Новых фильмов: {total_parsed}")
     logger.info(f"Время: {(time.time()-start_time)/60:.1f} мин")
     logger.info("="*60)
