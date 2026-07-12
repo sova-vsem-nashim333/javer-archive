@@ -26,5 +26,5 @@ jobs:
       - name: Run parser
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
-        run: python /scripts/parse_javdb.py
+        run: python scripts/parse_javdb.py
         timeout-minutes: 360
