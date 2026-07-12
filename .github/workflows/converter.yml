@@ -1,0 +1,98 @@
+name: Migrate Data Format
+
+on:
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install msgpack
+      
+      - name: Migrate data files
+        env:
+          XOR_KEY: ${{ secrets.XOR_KEY }}
+        run: |
+          python -c "
+          import os, json, gzip, msgpack, sys
+          
+          DATA_DIR = 'data'
+          XOR_KEY = os.environ.get('XOR_KEY', 'local_dev_fallback_key_change_me')
+          
+          def xor_encrypt_decrypt(data, key):
+              key_bytes = key.encode('utf-8')
+              result = bytearray(len(data))
+              for i in range(len(data)):
+                  result[i] = data[i] ^ key_bytes[i % len(key_bytes)]
+              return bytes(result)
+          
+          def load_old(filepath, key):
+              with open(filepath, 'rb') as f:
+                  encrypted = f.read()
+              decrypted = xor_encrypt_decrypt(encrypted, key)
+              return json.loads(decrypted.decode('utf-8'))
+          
+          def save_new(data, filepath, key):
+              msgpack_bytes = msgpack.packb(data)
+              compressed = gzip.compress(msgpack_bytes, compresslevel=9)
+              encrypted = xor_encrypt_decrypt(compressed, key)
+              with open(filepath, 'wb') as f:
+                  f.write(encrypted)
+          
+          def is_new_format(filepath, key):
+              try:
+                  with open(filepath, 'rb') as f:
+                      encrypted = f.read()
+                  compressed = xor_encrypt_decrypt(encrypted, key)
+                  gzip.decompress(compressed)
+                  return True
+              except:
+                  return False
+          
+          files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith('.bin')])
+          print(f'Найдено {len(files)} файлов')
+          
+          migrated = 0
+          for f in files:
+              filepath = os.path.join(DATA_DIR, f)
+              
+              if is_new_format(filepath, XOR_KEY):
+                  print(f'  {f}: уже в новом формате')
+                  continue
+              
+              try:
+                  data = load_old(filepath, XOR_KEY)
+                  save_new(data, filepath, XOR_KEY)
+                  
+                  old_size = os.path.getsize(filepath)
+                  films = len(data.get('films', []))
+                  print(f'  {f}: ✅ мигрирован ({films} фильмов, {old_size:,} байт)')
+                  migrated += 1
+              except Exception as e:
+                  print(f'  {f}: ❌ ошибка - {e}')
+          
+          print(f'\nМигрировано: {migrated}')
+          "    
+      
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add data/*.bin
+          git diff --staged --quiet || (
+            git commit -m "🔄 Migrate data to msgpack+gzip+xor format [skip ci]"
+            git push
+          )

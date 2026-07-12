@@ -29,7 +29,7 @@ jobs:
       - name: Build Index
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
-        run: node build-index.js
+        run: node /scripts/build-index.js
       
       - name: Commit and push
         run: |

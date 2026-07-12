@@ -46,7 +46,7 @@ function normalizeFilm(film) {
 }
 
 async function buildIndex() {
-  const rootDir = __dirname;
+  const rootDir = path.resolve(__dirname, '..');
   const dataDir = path.join(rootDir, 'data');
   const indexDir = path.join(rootDir, 'index');
   

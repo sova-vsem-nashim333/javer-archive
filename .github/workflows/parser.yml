@@ -21,10 +21,10 @@ jobs:
           python-version: '3.11'
           
       - name: Install dependencies
-        run: pip install cloudscraper beautifulsoup4 lxml
+        run: pip install cloudscraper beautifulsoup4 lxml msgpack
           
       - name: Run parser
         env:
           XOR_KEY: ${{ secrets.XOR_KEY }}
-        run: python parse_javdb.py
+        run: python /scripts/parse_javdb.py
         timeout-minutes: 360

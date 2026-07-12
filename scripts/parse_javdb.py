@@ -7,6 +7,8 @@ import os
 import queue
 import subprocess
 import requests
+import gzip
+import msgpack
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone, timedelta
 import logging
@@ -15,6 +17,8 @@ import random
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from threading import Lock
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)) + '/..')
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -159,9 +163,10 @@ def save_encrypted(data: dict, filepath: str, key: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     # Минифицируем перед сохранением
     minified = minify_json(data)
-    # Компактный JSON
-    json_str = json.dumps(minified, ensure_ascii=False, separators=(',', ':'))
-    encrypted = xor_encrypt_decrypt(json_str.encode('utf-8'), key)
+    # msgpack → gzip → xor
+    msgpack_bytes = msgpack.packb(minified)
+    compressed = gzip.compress(msgpack_bytes, compresslevel=9)
+    encrypted = xor_encrypt_decrypt(compressed, key)
     with open(filepath, 'wb') as f:
         f.write(encrypted)
 
@@ -170,8 +175,9 @@ def load_encrypted(filepath: str, key: str) -> dict:
         return None
     with open(filepath, 'rb') as f:
         encrypted = f.read()
-    decrypted = xor_encrypt_decrypt(encrypted, key)
-    data = json.loads(decrypted.decode('utf-8'))
+    compressed = xor_encrypt_decrypt(encrypted, key)
+    msgpack_bytes = gzip.decompress(compressed)
+    data = msgpack.unpackb(msgpack_bytes)
     # Нормализуем (поддерживает старые и новые форматы)
     return normalize_json(data)
 
