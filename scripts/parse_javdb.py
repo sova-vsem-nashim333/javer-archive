@@ -427,7 +427,7 @@ def get_list_from_links_after_label(soup, label_text):
     return items
 
 def parse_actress_page(url_path, lastmod=None):
-    """Парсит страницу актрисы (исправленная версия)"""
+    """Парсит страницу актрисы (исправленная версия с правильным порядком полей)"""
     for attempt in range(MAX_RETRIES):
         scraper = get_scraper()
         try:
@@ -445,6 +445,12 @@ def parse_actress_page(url_path, lastmod=None):
                 resp.encoding = 'utf-8'
             
             soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Ищем основной контейнер с информацией
+            info_div = soup.find('div', class_='col-12')
+            if not info_div:
+                # Ищем любой div с информацией об актрисе
+                info_div = soup.find('div', class_=lambda c: c and 'col-' in c)
             
             # Имя
             name = None
@@ -467,41 +473,116 @@ def parse_actress_page(url_path, lastmod=None):
                     raw_name = path_parts[-1].replace('-', ' ')
                     name = raw_name.title()
             
-            # Дата рождения (из ссылки)
-            dob = get_text_from_link_after_label(soup, 'DOB:')
+            # Получаем весь текст из информационного блока для анализа
+            info_text = ''
+            if info_div:
+                info_text = info_div.get_text(separator=' | ', strip=True)
             
-            # Дебют (из ссылки)
-            debut = get_text_from_link_after_label(soup, 'Debut:')
+            # Инициализируем переменные
+            dob = None
+            debut = None
+            birthplace = None
+            sign = None
+            blood = None
+            measurements = None
+            cup = None
+            height = None
+            shoe_size = None
+            hair_length = []
+            hair_color = []
+            tags = []
             
-            # Место рождения (текст после <b>)
-            birthplace = get_text_after_label(soup, 'Birthplace:')
+            # Ищем все <b> теги и анализируем их содержимое
+            b_tags = soup.find_all('b')
             
-            # Знак зодиака (текст после <b>)
-            sign = get_text_after_label(soup, 'Sign:')
-            
-            # Группа крови (текст после <b>)
-            blood = get_text_after_label(soup, 'Blood:')
-            
-            # Размеры (текст после <b>)
-            measurements = get_text_after_label(soup, 'Measurements:')
-            
-            # Размер чашки (из ссылки)
-            cup = get_text_from_link_after_label(soup, 'Cup:')
-            
-            # Рост (из ссылки)
-            height = get_text_from_link_after_label(soup, 'Height:')
-            
-            # Размер обуви (текст после <b>)
-            shoe_size = get_text_after_label(soup, 'Shoe Size:')
-            
-            # Длина волос (список из ссылок)
-            hair_length = get_list_from_links_after_label(soup, 'Hair Length(s):')
-            
-            # Цвет волос (список из ссылок)
-            hair_color = get_list_from_links_after_label(soup, 'Hair Color(s):')
-            
-            # Теги (список из ссылок, исключая "Suggest Tags")
-            tags = get_list_from_links_after_label(soup, 'Tags:')
+            for b_tag in b_tags:
+                b_text = b_tag.get_text(strip=True).rstrip(':')
+                
+                if b_text == 'Age':
+                    # Age игнорируем, но отмечаем позицию
+                    continue
+                    
+                elif b_text == 'DOB':
+                    # Ищем дату рождения - это должна быть ссылка сразу после DOB
+                    dob_link = b_tag.find_next('a', class_='idol-box-link')
+                    if dob_link and not dob:  # Проверяем, что еще не нашли
+                        dob_text = dob_link.get_text(strip=True)
+                        if dob_text and '?' not in dob_text:
+                            dob = dob_text
+                
+                elif b_text == 'Debut':
+                    # Ищем дебют - это ссылка после Debut, НО не первая ссылка после Age
+                    debut_link = b_tag.find_next('a', class_='idol-box-link')
+                    if debut_link and not debut:  # Проверяем, что еще не нашли
+                        debut_text = debut_link.get_text(strip=True)
+                        if debut_text and '?' not in debut_text:
+                            debut = debut_text
+                
+                elif b_text == 'Debut Age':
+                    # Debut Age игнорируем
+                    continue
+                
+                elif b_text == 'Birthplace':
+                    # Место рождения - текст после тега
+                    next_text = get_text_between_b_tags(b_tag)
+                    if next_text and '?' not in next_text and not birthplace:
+                        birthplace = next_text
+                
+                elif b_text == 'Sign':
+                    # Знак зодиака
+                    next_text = get_text_between_b_tags(b_tag)
+                    if next_text and '?' not in next_text and not sign:
+                        sign = next_text
+                
+                elif b_text == 'Blood':
+                    # Группа крови
+                    next_text = get_text_between_b_tags(b_tag)
+                    if next_text and '?' not in next_text and not blood:
+                        blood = next_text
+                
+                elif b_text == 'Measurements':
+                    # Размеры
+                    next_text = get_text_between_b_tags(b_tag)
+                    if next_text and '?' not in next_text and not measurements:
+                        measurements = next_text
+                
+                elif b_text == 'Cup':
+                    # Размер чашки - обычно ссылка
+                    cup_link = b_tag.find_next('a', class_='idol-box-link')
+                    if cup_link and not cup:
+                        cup_text = cup_link.get_text(strip=True)
+                        if cup_text and '?' not in cup_text:
+                            cup = cup_text
+                
+                elif b_text == 'Height':
+                    # Рост - обычно ссылка
+                    height_link = b_tag.find_next('a', class_='idol-box-link')
+                    if height_link and not height:
+                        height_text = height_link.get_text(strip=True)
+                        if height_text and '?' not in height_text:
+                            height = height_text
+                
+                elif b_text == 'Shoe Size':
+                    # Размер обуви
+                    next_text = get_text_between_b_tags(b_tag)
+                    if next_text and '?' not in next_text and not shoe_size:
+                        shoe_size = next_text
+                
+                elif b_text == 'Hair Length(s)':
+                    # Длина волос - собираем все ссылки до следующего <b>
+                    hair_length = get_links_between_b_tags(b_tag)
+                
+                elif b_text == 'Hair Color(s)':
+                    # Цвет волос
+                    hair_color = get_links_between_b_tags(b_tag)
+                
+                elif b_text == 'Tags':
+                    # Теги
+                    tags = get_links_between_b_tags(b_tag, exclude_text='Suggest Tags')
+                
+                elif b_text == 'JP':
+                    # JP уже обработан выше
+                    continue
             
             actress_data = {
                 'name': name,
@@ -521,15 +602,74 @@ def parse_actress_page(url_path, lastmod=None):
                 'lastmod': lastmod
             }
             
+            # Логируем для отладки
+            logger.debug(f"Parsed actress: {actress_data}")
+            
             return_scraper(scraper)
             return actress_data
             
         except Exception as e:
-            logger.error(f"    Ошибка парсинга актрисы: {e}")
+            logger.error(f"    Ошибка парсинга актрисы {url_path}: {e}")
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
 
+def get_text_between_b_tags(start_b_tag):
+    """
+    Получает текст между текущим <b> тегом и следующим <b> тегом.
+    Используется для полей, где значение - просто текст.
+    """
+    result = []
+    current = start_b_tag.next_sibling
+    
+    while current:
+        # Проверяем, не достигли ли мы следующего <b> тега
+        if hasattr(current, 'name') and current.name == 'b':
+            break
+        
+        if isinstance(current, str):
+            text = current.strip()
+            # Убираем разделители
+            text = text.strip(' -–\t<br>')
+            if text and text != '-':
+                result.append(text)
+        elif hasattr(current, 'get_text'):
+            # Пропускаем ссылки, так как они обрабатываются отдельно
+            if current.name != 'a':
+                text = current.get_text(strip=True)
+                if text:
+                    result.append(text)
+        
+        current = current.next_sibling
+    
+    if result:
+        combined = ' '.join(result).strip(' -–')
+        if combined and '?' not in combined:
+            return combined
+    return None
+
+def get_links_between_b_tags(start_b_tag, exclude_text=None):
+    """
+    Собирает текст из всех ссылок между текущим <b> и следующим <b> тегом.
+    Используется для Hair Length, Hair Color, Tags и т.д.
+    """
+    items = []
+    current = start_b_tag.next_sibling
+    
+    while current:
+        # Проверяем, не достигли ли мы следующего <b> тега
+        if hasattr(current, 'name') and current.name == 'b':
+            break
+        
+        if hasattr(current, 'name') and current.name == 'a':
+            text = current.get_text(strip=True)
+            if text and (not exclude_text or exclude_text not in text):
+                items.append(text)
+        
+        current = current.next_sibling
+    
+    return items
+    
 # --- Обработка sitemap актрис ---
 
 def process_actress_sitemap(sitemap_url, key, cache):
