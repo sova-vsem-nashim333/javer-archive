@@ -35,8 +35,7 @@ CACHE_FILE = "sitemap_cache.json"
 DATA_DIR = "data"
 MOVIES_FILE = os.path.join(DATA_DIR, "movies.bin")  # Единый файл для всех фильмов
 METADATA_FILE = "metadata.json"
-ACTRESS_DATA_DIR = "actress_data"
-ACTRESS_FILE = os.path.join(ACTRESS_DATA_DIR, "actress.bin")
+ACTRESS_FILE = os.path.join(DATA_DIR, "actress.bin") # Единый файл для всех актрис
 
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '2'))
 POOL_SIZE = MAX_WORKERS + 2
@@ -408,7 +407,7 @@ def get_list_from_links_after_label(soup, label_text):
     return items
 
 def parse_actress_page(url_path, lastmod=None):
-    """Парсит страницу актрисы (исправленная версия на основе реального HTML)"""
+    """Парсит страницу актрисы — надёжная версия для всех форматов"""
     for attempt in range(MAX_RETRIES):
         scraper = get_scraper()
         try:
@@ -440,186 +439,169 @@ def parse_actress_page(url_path, lastmod=None):
                     raw_name = path_parts[-1].replace('-', ' ')
                     name = raw_name.title()
             
-            # Японское имя - ищем <b>JP:</b>
+            # Японское имя
             jp_name = None
             jp_b = soup.find('b', string='JP:')
             if jp_b and jp_b.next_sibling:
                 jp_name = jp_b.next_sibling.strip()
             
-            # Инициализируем все поля
-            dob = None
-            debut = None
-            birthplace = None
-            sign = None
-            blood = None
-            measurements = None
-            cup = None
-            height = None
-            shoe_size = None
-            hair_length = []
-            hair_color = []
-            tags = []
-            
-            # Находим все <b> теги в информационном блоке
-            info_div = soup.find('div', class_='col-12')
-            
-            if info_div:
-                b_tags = info_div.find_all('b')
-                
-                for b_tag in b_tags:
-                    b_text = b_tag.get_text(strip=True).rstrip(':')
-                    
-                    if b_text == 'Age':
-                        continue  # Пропускаем Age
-                    
-                    elif b_text == 'DOB':
-                        dob_link = b_tag.find_next('a', class_='idol-box-link')
-                        if dob_link:
-                            text = dob_link.get_text(strip=True)
-                            if text and '?' not in text:
-                                dob = text
-                    
-                    elif b_text == 'Debut':
-                        debut_link = b_tag.find_next('a', class_='idol-box-link')
-                        if debut_link:
-                            text = debut_link.get_text(strip=True)
-                            if text and '?' not in text:
-                                debut = text
-                    
-                    elif b_text == 'Debut Age':
-                        continue  # Пропускаем Debut Age
-                    
-                    elif b_text == 'Birthplace':
-                        text = get_text_after_b(b_tag)
-                        if text and '?' not in text:
-                            birthplace = text
-                    
-                    elif b_text == 'Sign':
-                        text = get_text_after_b(b_tag)
-                        if text and '?' not in text:
-                            sign = text
-                    
-                    elif b_text == 'Blood':
-                        text = get_text_after_b(b_tag)
-                        if text and '?' not in text:
-                            blood = text
-                    
-                    elif b_text == 'Measurements':
-                        text = get_text_after_b(b_tag)
-                        if text and '?' not in text:
-                            measurements = text
-                    
-                    elif b_text == 'Cup':
-                        cup_link = b_tag.find_next('a', class_='idol-box-link')
-                        if cup_link:
-                            text = cup_link.get_text(strip=True)
-                            if text:
-                                cup = text
-                    
-                    elif b_text == 'Height':
-                        height_link = b_tag.find_next('a', class_='idol-box-link')
-                        if height_link:
-                            text = height_link.get_text(strip=True)
-                            if text and '?' not in text:
-                                height = text
-                    
-                    elif b_text == 'Shoe Size':
-                        text = get_text_after_b(b_tag)
-                        if text and '?' not in text:
-                            shoe_size = text
-                    
-                    elif b_text == 'Hair Length(s)':
-                        hair_length = get_links_after_b(b_tag)
-                    
-                    elif b_text == 'Hair Color(s)':
-                        hair_color = get_links_after_b(b_tag)
-                    
-                    elif b_text == 'Tags':
-                        tags = get_links_after_b(b_tag, exclude_btn=True)
-            
-            actress_data = {
+            # Инициализация
+            result = {
                 'name': name,
                 'jp_name': jp_name,
-                'dob': dob,
-                'debut': debut,
-                'birthplace': birthplace,
-                'sign': sign,
-                'blood': blood,
-                'measurements': measurements,
-                'cup': cup,
-                'height': height,
-                'shoe_size': shoe_size,
-                'hair_length': hair_length,
-                'hair_color': hair_color,
-                'tags': tags,
+                'dob': None,
+                'debut': None,
+                'birthplace': None,
+                'sign': None,
+                'blood': None,
+                'measurements': None,
+                'cup': None,
+                'height': None,
+                'shoe_size': None,
+                'hair_length': [],
+                'hair_color': [],
+                'tags': [],
                 'lastmod': lastmod
             }
             
+            # Находим ВСЕ <b> теги на странице
+            all_b_tags = soup.find_all('b')
+            
+            # Словарь для быстрого поиска: ключ = текст <b> тега, значение = сам тег
+            b_tag_map = {}
+            for b_tag in all_b_tags:
+                text = b_tag.get_text(strip=True).rstrip(':').strip()
+                b_tag_map[text] = b_tag
+            
+            # Функция для извлечения значения после <b> тега
+            def extract_value(label, prefer_link=True):
+                """
+                Извлекает значение после <b> с текстом label.
+                Если prefer_link=True, ищет ссылку <a class="idol-box-link">,
+                иначе берёт текст между этим <b> и следующим <b> или <br>.
+                """
+                b_tag = b_tag_map.get(label)
+                if not b_tag:
+                    return None
+                
+                if prefer_link:
+                    # Ищем ссылку с классом idol-box-link
+                    link = b_tag.find_next('a', class_='idol-box-link')
+                    if link:
+                        text = link.get_text(strip=True)
+                        if text and '?' not in text:
+                            return text
+                
+                # Если ссылка не найдена или prefer_link=False, берём текст
+                parts = []
+                current = b_tag.next_sibling
+                while current:
+                    if hasattr(current, 'name'):
+                        if current.name in ('b', 'br', 'p'):
+                            break
+                        if current.name == 'a':
+                            # Проверяем, не является ли ссылка частью данных
+                            if 'idol-box-link' in current.get('class', []):
+                                text = current.get_text(strip=True)
+                                if text and '?' not in text:
+                                    parts.append(text)
+                            current = current.next_sibling
+                            continue
+                    
+                    if isinstance(current, str):
+                        text = current.strip()
+                        # Убираем разделители и дефисы
+                        text = text.strip(' -–\t\n\r')
+                        if text and text != '-' and '?' not in text:
+                            parts.append(text)
+                    
+                    current = current.next_sibling
+                
+                result = ' '.join(parts).strip()
+                if result and '?' not in result:
+                    return result
+                return None
+            
+            def extract_list(label):
+                """Извлекает список ссылок после <b> тега, останавливаясь на следующем <b> или кнопке"""
+                b_tag = b_tag_map.get(label)
+                if not b_tag:
+                    return []
+                
+                items = []
+                current = b_tag.next_sibling
+                while current:
+                    if hasattr(current, 'name'):
+                        if current.name in ('b', 'br', 'p'):
+                            break
+                        if current.name == 'a':
+                            classes = current.get('class', [])
+                            # Пропускаем кнопки
+                            if 'btn' in classes:
+                                break
+                            text = current.get_text(strip=True)
+                            if text and '?' not in text:
+                                items.append(text)
+                    
+                    current = current.next_sibling
+                
+                return items
+            
+            # --- Извлекаем все поля ---
+            
+            # DOB — всегда ищем ссылку
+            result['dob'] = extract_value('DOB', prefer_link=True)
+            
+            # Debut — всегда ищем ссылку
+            result['debut'] = extract_value('Debut', prefer_link=True)
+            
+            # Birthplace — может быть ссылкой или текстом
+            birthplace = extract_value('Birthplace', prefer_link=True)
+            if birthplace:
+                result['birthplace'] = birthplace
+            
+            # Sign — может быть ссылкой или текстом
+            sign = extract_value('Sign', prefer_link=True)
+            if sign:
+                result['sign'] = sign
+            
+            # Blood — может быть ссылкой или текстом
+            blood = extract_value('Blood', prefer_link=True)
+            if blood:
+                result['blood'] = blood
+            
+            # Measurements — всегда текст (84-57-84)
+            result['measurements'] = extract_value('Measurements', prefer_link=False)
+            
+            # Cup — всегда ссылка
+            result['cup'] = extract_value('Cup', prefer_link=True)
+            
+            # Height — всегда ссылка
+            result['height'] = extract_value('Height', prefer_link=True)
+            
+            # Shoe Size — текст
+            result['shoe_size'] = extract_value('Shoe Size', prefer_link=False)
+            
+            # Hair Length(s) — список ссылок
+            result['hair_length'] = extract_list('Hair Length(s)')
+            
+            # Hair Color(s) — список ссылок
+            result['hair_color'] = extract_list('Hair Color(s)')
+            
+            # Tags — список ссылок (исключая кнопку "Suggest Tags")
+            result['tags'] = extract_list('Tags')
+            
             return_scraper(scraper)
-            return actress_data
+            return result
             
         except Exception as e:
             logger.error(f"    Ошибка парсинга актрисы {url_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
 
-
-def get_text_after_b(b_tag):
-    """
-    Получает текст после <b> тега до следующего тега (учитывая разделители).
-    """
-    result_parts = []
-    current = b_tag.next_sibling
-    
-    while current:
-        if hasattr(current, 'name'):
-            if current.name in ('b', 'br', 'p'):
-                break
-            if current.name == 'a':
-                current = current.next_sibling
-                continue
-        
-        if isinstance(current, str):
-            text = current.strip()
-            if text and text != '-':
-                text = text.strip(' -–\t')
-                if text:
-                    result_parts.append(text)
-        
-        current = current.next_sibling
-    
-    result = ' '.join(result_parts).strip()
-    if result and result != '-':
-        return result
-    return None
-
-
-def get_links_after_b(b_tag, exclude_btn=False):
-    """
-    Собирает текст из ссылок после <b> тега до следующего структурного тега.
-    """
-    items = []
-    current = b_tag.next_sibling
-    
-    while current:
-        if hasattr(current, 'name'):
-            if current.name in ('b', 'br', 'p'):
-                break
-            
-            if current.name == 'a':
-                classes = current.get('class', [])
-                if exclude_btn and 'btn' in classes:
-                    break
-                
-                text = current.get_text(strip=True)
-                if text:
-                    items.append(text)
-        
-        current = current.next_sibling
-    
-    return items
-    
 # --- Обработка sitemap актрис ---
 
 def process_actress_sitemap(sitemap_url, key, cache):
@@ -951,7 +933,7 @@ def commit_and_push():
                       check=True, capture_output=True)
         
         subprocess.run(['git', 'add', 'data/', 'metadata.json', 
-                       'sitemap_cache.json', 'actress_data/'], 
+                       'sitemap_cache.json'], 
                       check=True, capture_output=True)
         
         result = subprocess.run(['git', 'diff', '--staged', '--quiet'], 
