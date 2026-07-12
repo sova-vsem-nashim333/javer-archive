@@ -228,7 +228,7 @@ def save_actress_encrypted(data: dict, filepath: str, key: str):
         f.write(encrypted)
     
     # Коммитим после сохранения актрис
-    commit_actress_data()
+    commit_and_push()
 
 def load_encrypted(filepath: str, key: str) -> dict:
     if not os.path.exists(filepath):
@@ -544,29 +544,6 @@ def parse_actress_page(url_path, lastmod=None):
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
-
-# --- Коммит данных актрис ---
-
-def commit_actress_data():
-    """Коммитит только данные актрис"""
-    try:
-        subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], 
-                      check=True, capture_output=True)
-        subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], 
-                      check=True, capture_output=True)
-        
-        subprocess.run(['git', 'add', 'actress_data/'], 
-                      check=True, capture_output=True)
-        result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
-        if result.returncode != 0:
-            subprocess.run(['git', 'commit', '-m', 
-                          f'Update actresses {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], 
-                          check=True, capture_output=True)
-            subprocess.run(['git', 'pull', '--rebase'], check=True, capture_output=True)
-            subprocess.run(['git', 'push'], check=True, capture_output=True)
-            logger.info("  📤 Данные актрис закоммичены и запушены")
-    except Exception as e:
-        logger.error(f"  Ошибка коммита актрис: {e}")
 
 # --- Обработка sitemap актрис ---
 
@@ -909,18 +886,32 @@ def commit_and_push():
                       check=True, capture_output=True)
         
         subprocess.run(['git', 'add', 'data/', 'metadata.json', 
-                       'sitemap_cache.json'], 
+                       'sitemap_cache.json', 'actress_data/'], 
                       check=True, capture_output=True)
-        result = subprocess.run(['git', 'diff', '--staged', '--quiet'], capture_output=True)
+        
+        result = subprocess.run(['git', 'diff', '--staged', '--quiet'], 
+                              capture_output=True)
         if result.returncode != 0:
             subprocess.run(['git', 'commit', '-m', 
                           f'Update {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")}'], 
                           check=True, capture_output=True)
-            subprocess.run(['git', 'pull', '--rebase'], check=True, capture_output=True)
+            
+            # Безопасный pull с обработкой конфликтов
+            try:
+                subprocess.run(['git', 'pull', '--rebase'], 
+                             check=True, capture_output=True)
+            except subprocess.CalledProcessError:
+                logger.warning("Rebase failed, aborting and trying merge")
+                subprocess.run(['git', 'rebase', '--abort'], 
+                             capture_output=True)
+                subprocess.run(['git', 'pull', '--no-rebase'], 
+                             check=True, capture_output=True)
+            
             subprocess.run(['git', 'push'], check=True, capture_output=True)
-            logger.info("  📤 Закоммичено и запушено")
+            logger.info("📤 Закоммичено и запушено")
+            
     except Exception as e:
-        logger.error(f"  Ошибка коммита: {e}")
+        logger.error(f"Ошибка коммита: {e}")
 
 # --- Главная ---
 
