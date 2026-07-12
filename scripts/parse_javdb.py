@@ -9,6 +9,7 @@ import subprocess
 import requests
 import gzip
 import msgpack
+import re
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone, timedelta
 import logging
@@ -33,9 +34,9 @@ BASE_URL = "https://www.javdatabase.com"
 SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 CACHE_FILE = "sitemap_cache.json"
 DATA_DIR = "data"
-MOVIES_FILE = os.path.join(DATA_DIR, "movies.bin")  # Единый файл для всех фильмов
+MOVIES_FILE = os.path.join(DATA_DIR, "movies.bin")
 METADATA_FILE = "metadata.json"
-ACTRESS_FILE = os.path.join(DATA_DIR, "actress.bin") # Единый файл для всех актрис
+ACTRESS_FILE = os.path.join(DATA_DIR, "actress.bin")
 
 MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '2'))
 POOL_SIZE = MAX_WORKERS + 2
@@ -53,16 +54,13 @@ USER_AGENTS = [
 REQUEST_TIMEOUT = 120
 MAX_RETRIES = 2
 
-# Блокировки
 existing_codes_lock = Lock()
 cache_lock = Lock()
 actress_lock = Lock()
-movies_lock = Lock()  # Блокировка для единого файла фильмов
+movies_lock = Lock()
 
-# Пул scraper'ов
 scraper_pool = queue.Queue(maxsize=POOL_SIZE)
 
-# --- Маппинг для новых сокращенных ключей ---
 NEW_KEYS = {
     'code': 'c',
     'title': 't',
@@ -79,7 +77,6 @@ NEW_KEYS = {
     'films': 'f'
 }
 
-# Ключи, которые могут быть в старых данных
 OLD_KEYS = {
     'c': 'code',
     't': 'title',
@@ -97,7 +94,6 @@ OLD_KEYS = {
     'f': 'films'
 }
 
-# --- Маппинг ключей для актрис (без url) ---
 ACTRESS_NEW_KEYS = {
     'name': 'n',
     'jp_name': 'jn',
@@ -119,14 +115,11 @@ ACTRESS_NEW_KEYS = {
 ACTRESS_OLD_KEYS = {v: k for k, v in ACTRESS_NEW_KEYS.items()}
 
 def minify_json(data):
-    """Минифицирует JSON для сохранения (без description)"""
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
-            # Пропускаем description
             if k == 'description':
                 continue
-            # Используем новые ключи
             new_key = NEW_KEYS.get(k, k)
             result[new_key] = minify_json(v)
         return result
@@ -135,7 +128,6 @@ def minify_json(data):
     return data
 
 def minify_actress_json(data):
-    """Минифицирует JSON актрисы"""
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
@@ -150,7 +142,6 @@ def minify_actress_json(data):
     return data
 
 def normalize_json(data):
-    """Нормализует JSON после загрузки (поддерживает и старые и новые ключи)"""
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
@@ -164,7 +155,6 @@ def normalize_json(data):
     return data
 
 def normalize_actress_json(data):
-    """Нормализует JSON актрисы после загрузки"""
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
@@ -178,7 +168,6 @@ def normalize_actress_json(data):
     return data
 
 def parse_datetime(date_str):
-    """Парсит дату из различных форматов"""
     if not date_str:
         return None
     
@@ -199,8 +188,6 @@ def parse_datetime(date_str):
         return datetime.fromisoformat(date_str)
     except:
         return None
-
-# --- Шифрование ---
 
 def xor_encrypt_decrypt(data: bytes, key: str) -> bytes:
     key_bytes = key.encode('utf-8')
@@ -227,7 +214,6 @@ def save_actress_encrypted(data: dict, filepath: str, key: str):
     with open(filepath, 'wb') as f:
         f.write(encrypted)
     
-    # Коммитим после сохранения актрис
     commit_and_push()
 
 def load_encrypted(filepath: str, key: str) -> dict:
@@ -249,8 +235,6 @@ def load_actress_encrypted(filepath: str, key: str) -> dict:
     msgpack_bytes = gzip.decompress(compressed)
     data = msgpack.unpackb(msgpack_bytes)
     return normalize_actress_json(data)
-
-# --- Scraper pool ---
 
 def create_scraper():
     scraper = cloudscraper.create_scraper(
@@ -311,10 +295,7 @@ def fetch_with_retry(scraper, url, max_retries=MAX_RETRIES):
     
     return None
 
-# --- Кэш и сохранение ---
-
 def load_existing_codes(key):
-    """Загружает существующие коды фильмов из единого файла movies.bin"""
     codes = set()
     data = load_encrypted(MOVIES_FILE, key)
     if data:
@@ -323,7 +304,6 @@ def load_existing_codes(key):
     return codes
 
 def save_all_movies(all_films, key):
-    """Сохраняет все фильмы в единый файл movies.bin"""
     data = {
         "films": all_films,
         "metadata": {
@@ -336,78 +316,119 @@ def save_all_movies(all_films, key):
     save_encrypted(data, MOVIES_FILE, key)
     logger.info(f"  💾 movies.bin: всего {len(all_films)} фильмов")
 
-# --- Парсинг актрисы (исправленный, без url) ---
+# --- НОВЫЙ УНИВЕРСАЛЬНЫЙ ПАРСЕР АКТРИС ---
 
-def get_text_after_label(soup, label_text):
+def parse_field_from_info_div(info_div, label):
     """
-    Ищет <b> с текстом label_text и возвращает текст после него до следующего тега или символа.
-    Для структуры вида: <b>Label:</b> value - <b>Next:</b>
+    Универсальный извлекатель значений из info_div.
+    Поддерживает оба формата:
+    1. <b>DOB:</b> ? - следующий тег
+    2. <b>DOB:</b> <a class="idol-box-link">1988-07-02</a> - следующий тег
     """
-    b_tag = soup.find('b', string=lambda t: t and t.strip().startswith(label_text))
+    # Находим <b> тег с нужной меткой
+    b_tag = None
+    for b in info_div.find_all('b'):
+        text = b.get_text(strip=True).rstrip(':').strip()
+        if text == label:
+            b_tag = b
+            break
+    
     if not b_tag:
         return None
     
-    # Собираем текст между этим <b> и следующим тегом
-    result = []
-    for sibling in b_tag.next_siblings:
-        if isinstance(sibling, type(b_tag)) and sibling.name == 'b':
-            break  # Достигли следующего <b>, останавливаемся
-        if isinstance(sibling, str):
-            text = sibling.strip()
-            if text:
-                # Убираем разделители и лишние символы
-                text = text.strip(' -–\t')
-                if text:
-                    result.append(text)
-        elif hasattr(sibling, 'get_text'):
-            text = sibling.get_text(strip=True)
-            if text:
-                result.append(text)
+    # Собираем все значимые элементы после <b> до следующего <b> или <br>
+    parts = []
+    current = b_tag.next_sibling
     
-    if result:
-        combined = ' '.join(result).strip(' -–')
-        if combined and '?' not in combined:
-            return combined
-    return None
-
-def get_text_from_link_after_label(soup, label_text):
-    """
-    Ищет <b> с текстом label_text и возвращает текст из первой ссылки после него.
-    Для структуры вида: <b>Label:</b> <a class="idol-box-link">value</a>
-    """
-    b_tag = soup.find('b', string=lambda t: t and t.strip().startswith(label_text))
-    if not b_tag:
+    while current:
+        if hasattr(current, 'name'):
+            # Останавливаемся на следующем <b> или <br>
+            if current.name == 'b':
+                break
+            if current.name == 'br':
+                break
+            
+            # Если это ссылка
+            if current.name == 'a':
+                classes = current.get('class', [])
+                # Пропускаем кнопки
+                if 'btn' in classes:
+                    break
+                # Берем текст из ссылки (в том числе idol-box-link)
+                text = current.get_text(strip=True)
+                if text and '?' not in text:
+                    parts.append(text)
+                current = current.next_sibling
+                continue
+            
+            # Для других тегов берем текст
+            if current.name not in ('script', 'style'):
+                text = current.get_text(strip=True)
+                if text and '?' not in text and text not in ['-', '–']:
+                    parts.append(text)
+            current = current.next_sibling
+            continue
+        
+        if isinstance(current, str):
+            text = current.strip()
+            # Убираем разделители
+            text = text.strip(' -–\t\n\r')
+            if text and text != '?' and '?' not in text:
+                parts.append(text)
+        
+        current = current.next_sibling
+    
+    result = ' '.join(parts).strip(' -–')
+    
+    # Фильтруем: если результат пустой или содержит только '?', возвращаем None
+    if not result or result == '?' or result == '-':
         return None
     
-    link = b_tag.find_next('a', class_='idol-box-link')
-    if link:
-        text = link.get_text(strip=True)
-        if text and '?' not in text:
-            return text
-    return None
+    return result
 
-def get_list_from_links_after_label(soup, label_text):
+def parse_list_field_from_info_div(info_div, label):
     """
-    Ищет <b> с текстом label_text и собирает текст из всех ссылок после него.
-    Для структуры вида: <b>Label(s):</b> <a>item1</a> <a>item2</a>
+    Извлекает список значений (например, Hair Length(s), Tags).
+    Останавливается на следующем <b> или кнопке.
     """
-    b_tag = soup.find('b', string=lambda t: t and t.strip().startswith(label_text))
+    b_tag = None
+    for b in info_div.find_all('b'):
+        text = b.get_text(strip=True).rstrip(':').strip()
+        if text == label:
+            b_tag = b
+            break
+    
     if not b_tag:
         return []
     
     items = []
-    for sibling in b_tag.next_siblings:
-        if isinstance(sibling, type(b_tag)) and sibling.name == 'b':
-            break  # Достигли следующего <b>
-        if hasattr(sibling, 'get') and sibling.name == 'a':
-            text = sibling.get_text(strip=True)
-            if text and text != 'Suggest Tags':
-                items.append(text)
+    current = b_tag.next_sibling
+    
+    while current:
+        if hasattr(current, 'name'):
+            if current.name == 'b':
+                break
+            if current.name == 'br':
+                break
+            
+            if current.name == 'a':
+                classes = current.get('class', [])
+                # Пропускаем кнопки
+                if 'btn' in classes:
+                    break
+                text = current.get_text(strip=True)
+                if text and '?' not in text and text != 'Suggest Tags':
+                    items.append(text)
+            
+            current = current.next_sibling
+            continue
+        
+        current = current.next_sibling
     
     return items
 
 def parse_actress_page(url_path, lastmod=None):
-    """Парсит страницу актрисы — надёжная версия для всех форматов"""
+    """Универсальный парсер страницы актрисы"""
     for attempt in range(MAX_RETRIES):
         scraper = get_scraper()
         try:
@@ -444,152 +465,36 @@ def parse_actress_page(url_path, lastmod=None):
             jp_b = soup.find('b', string='JP:')
             if jp_b and jp_b.next_sibling:
                 jp_name = jp_b.next_sibling.strip()
+                if not jp_name or jp_name == '?':
+                    jp_name = None
             
-            # Инициализация
+            # Находим info_div (контейнер с данными)
+            info_div = None
+            if h1:
+                info_div = h1.parent
+            
+            if not info_div:
+                logger.warning(f"    info_div не найден для {url_path}")
+                return None
+            
+            # Извлекаем все поля новым универсальным методом
             result = {
                 'name': name,
                 'jp_name': jp_name,
-                'dob': None,
-                'debut': None,
-                'birthplace': None,
-                'sign': None,
-                'blood': None,
-                'measurements': None,
-                'cup': None,
-                'height': None,
-                'shoe_size': None,
-                'hair_length': [],
-                'hair_color': [],
-                'tags': [],
+                'dob': parse_field_from_info_div(info_div, 'DOB'),
+                'debut': parse_field_from_info_div(info_div, 'Debut'),
+                'birthplace': parse_field_from_info_div(info_div, 'Birthplace'),
+                'sign': parse_field_from_info_div(info_div, 'Sign'),
+                'blood': parse_field_from_info_div(info_div, 'Blood'),
+                'measurements': parse_field_from_info_div(info_div, 'Measurements'),
+                'cup': parse_field_from_info_div(info_div, 'Cup'),
+                'height': parse_field_from_info_div(info_div, 'Height'),
+                'shoe_size': parse_field_from_info_div(info_div, 'Shoe Size'),
+                'hair_length': parse_list_field_from_info_div(info_div, 'Hair Length(s)'),
+                'hair_color': parse_list_field_from_info_div(info_div, 'Hair Color(s)'),
+                'tags': parse_list_field_from_info_div(info_div, 'Tags'),
                 'lastmod': lastmod
             }
-            
-            # Находим ВСЕ <b> теги на странице
-            all_b_tags = soup.find_all('b')
-            
-            # Словарь для быстрого поиска: ключ = текст <b> тега, значение = сам тег
-            b_tag_map = {}
-            for b_tag in all_b_tags:
-                text = b_tag.get_text(strip=True).rstrip(':').strip()
-                b_tag_map[text] = b_tag
-            
-            # Функция для извлечения значения после <b> тега
-            def extract_value(label, prefer_link=True):
-                """
-                Извлекает значение после <b> с текстом label.
-                Если prefer_link=True, ищет ссылку <a class="idol-box-link">,
-                иначе берёт текст между этим <b> и следующим <b> или <br>.
-                """
-                b_tag = b_tag_map.get(label)
-                if not b_tag:
-                    return None
-                
-                if prefer_link:
-                    # Ищем ссылку с классом idol-box-link
-                    link = b_tag.find_next('a', class_='idol-box-link')
-                    if link:
-                        text = link.get_text(strip=True)
-                        if text and '?' not in text:
-                            return text
-                
-                # Если ссылка не найдена или prefer_link=False, берём текст
-                parts = []
-                current = b_tag.next_sibling
-                while current:
-                    if hasattr(current, 'name'):
-                        if current.name in ('b', 'br', 'p'):
-                            break
-                        if current.name == 'a':
-                            # Проверяем, не является ли ссылка частью данных
-                            if 'idol-box-link' in current.get('class', []):
-                                text = current.get_text(strip=True)
-                                if text and '?' not in text:
-                                    parts.append(text)
-                            current = current.next_sibling
-                            continue
-                    
-                    if isinstance(current, str):
-                        text = current.strip()
-                        # Убираем разделители и дефисы
-                        text = text.strip(' -–\t\n\r')
-                        if text and text != '-' and '?' not in text:
-                            parts.append(text)
-                    
-                    current = current.next_sibling
-                
-                result = ' '.join(parts).strip()
-                if result and '?' not in result:
-                    return result
-                return None
-            
-            def extract_list(label):
-                """Извлекает список ссылок после <b> тега, останавливаясь на следующем <b> или кнопке"""
-                b_tag = b_tag_map.get(label)
-                if not b_tag:
-                    return []
-                
-                items = []
-                current = b_tag.next_sibling
-                while current:
-                    if hasattr(current, 'name'):
-                        if current.name in ('b', 'br', 'p'):
-                            break
-                        if current.name == 'a':
-                            classes = current.get('class', [])
-                            # Пропускаем кнопки
-                            if 'btn' in classes:
-                                break
-                            text = current.get_text(strip=True)
-                            if text and '?' not in text:
-                                items.append(text)
-                    
-                    current = current.next_sibling
-                
-                return items
-            
-            # --- Извлекаем все поля ---
-            
-            # DOB — всегда ищем ссылку
-            result['dob'] = extract_value('DOB', prefer_link=True)
-            
-            # Debut — всегда ищем ссылку
-            result['debut'] = extract_value('Debut', prefer_link=True)
-            
-            # Birthplace — может быть ссылкой или текстом
-            birthplace = extract_value('Birthplace', prefer_link=True)
-            if birthplace:
-                result['birthplace'] = birthplace
-            
-            # Sign — может быть ссылкой или текстом
-            sign = extract_value('Sign', prefer_link=True)
-            if sign:
-                result['sign'] = sign
-            
-            # Blood — может быть ссылкой или текстом
-            blood = extract_value('Blood', prefer_link=True)
-            if blood:
-                result['blood'] = blood
-            
-            # Measurements — всегда текст (84-57-84)
-            result['measurements'] = extract_value('Measurements', prefer_link=False)
-            
-            # Cup — всегда ссылка
-            result['cup'] = extract_value('Cup', prefer_link=True)
-            
-            # Height — всегда ссылка
-            result['height'] = extract_value('Height', prefer_link=True)
-            
-            # Shoe Size — текст
-            result['shoe_size'] = extract_value('Shoe Size', prefer_link=False)
-            
-            # Hair Length(s) — список ссылок
-            result['hair_length'] = extract_list('Hair Length(s)')
-            
-            # Hair Color(s) — список ссылок
-            result['hair_color'] = extract_list('Hair Color(s)')
-            
-            # Tags — список ссылок (исключая кнопку "Suggest Tags")
-            result['tags'] = extract_list('Tags')
             
             return_scraper(scraper)
             return result
@@ -601,8 +506,6 @@ def parse_actress_page(url_path, lastmod=None):
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
-
-# --- Обработка sitemap актрис ---
 
 def process_actress_sitemap(sitemap_url, key, cache):
     """Обрабатывает sitemap актрис"""
@@ -639,7 +542,7 @@ def process_actress_sitemap(sitemap_url, key, cache):
                         cached_time = parse_datetime(cached_time_str)
                         
                         if sitemap_time and cached_time and sitemap_time <= cached_time:
-                            continue  # Пропускаем, не изменилось
+                            continue
                 
                 urls.append((loc.text, lastmod_text))
         
@@ -648,7 +551,6 @@ def process_actress_sitemap(sitemap_url, key, cache):
         if not urls:
             return 0
         
-        # Загружаем существующие данные актрис
         existing_actresses = {}
         actress_data_file = load_actress_encrypted(ACTRESS_FILE, key)
         if actress_data_file:
@@ -685,7 +587,6 @@ def process_actress_sitemap(sitemap_url, key, cache):
                 except Exception as e:
                     logger.error(f"    ✗ {full_url}: {e}")
         
-        # Сохраняем актрис
         if parsed_count > 0:
             actress_data = {
                 'actresses': existing_actresses,
@@ -698,7 +599,6 @@ def process_actress_sitemap(sitemap_url, key, cache):
             save_actress_encrypted(actress_data, ACTRESS_FILE, key)
             logger.info(f"  💾 Сохранено {parsed_count} актрис (всего {len(existing_actresses)})")
         
-        # Обновляем кэш
         with cache_lock:
             if 'processed_actresses' not in cache:
                 cache['processed_actresses'] = {}
@@ -714,7 +614,7 @@ def process_actress_sitemap(sitemap_url, key, cache):
         logger.error(f"  Ошибка обработки sitemap актрис: {e}")
         return 0
 
-# --- Парсинг фильма (БЕЗ description) ---
+# --- Парсинг фильма ---
 
 def parse_film_page(url_path):
     for attempt in range(MAX_RETRIES):
@@ -736,14 +636,12 @@ def parse_film_page(url_path):
             soup = BeautifulSoup(resp.text, 'html.parser')
             film_data = {}
             
-            # Код
             path_parts = url_path.strip('/').split('/')
             if len(path_parts) >= 2 and path_parts[-2] == 'movies':
                 film_data['code'] = path_parts[-1].upper()
             else:
                 return None
 
-            # Название
             title = None
             h1 = soup.find('h1')
             if h1:
@@ -758,7 +656,6 @@ def parse_film_page(url_path):
                     title = title_tag.get_text(strip=True).replace(' - JAV Database', '')
             film_data['title'] = title or 'No Title'
 
-            # Обложка
             thumb = None
             poster = soup.find('div', id='poster-container')
             if poster:
@@ -773,7 +670,6 @@ def parse_film_page(url_path):
             
             film_data['thumbnail'] = thumb
 
-            # Скриншоты
             screenshots = []
             gallery = soup.find('div', class_='image-gallery-section')
             if gallery:
@@ -781,7 +677,6 @@ def parse_film_page(url_path):
                     screenshots.append(urlparse(a['data-image-src']).path)
             film_data['screenshots'] = screenshots[:10]
 
-            # Метаданные
             genres = []
             actresses = []
             movie_table = soup.find('div', class_='movietable')
@@ -798,7 +693,6 @@ def parse_film_page(url_path):
                 'actress': actresses[:10]
             }
 
-            # Дата релиза
             release_date = None
             if movie_table:
                 for row in movie_table.find_all(['p', 'div']):
@@ -820,8 +714,6 @@ def parse_film_page(url_path):
             if attempt < MAX_RETRIES - 1:
                 continue
             return None
-
-# --- Обработка sitemap ---
 
 def process_sitemap(sitemap_url, existing_codes, all_films, key, cache):
     """Обрабатывает sitemap и добавляет фильмы в общий список"""
@@ -907,7 +799,6 @@ def process_sitemap(sitemap_url, existing_codes, all_films, key, cache):
                 except Exception as e:
                     logger.error(f"    ✗ {code}: {e}")
         
-        # Добавляем новые фильмы в общий список
         if new_films:
             with movies_lock:
                 all_films.extend(new_films)
@@ -959,8 +850,6 @@ def commit_and_push():
     except Exception as e:
         logger.error(f"Ошибка коммита: {e}")
 
-# --- Главная ---
-
 def main():
     start_time = time.time()
     logger.info("="*60)
@@ -969,7 +858,6 @@ def main():
     
     init_scraper_pool(POOL_SIZE)
     
-    # Загружаем sitemap index
     scraper = get_scraper()
     try:
         logger.info(f"Загрузка sitemap-индекса: {SITEMAP_INDEX_URL}")
@@ -984,7 +872,6 @@ def main():
     root = ET.fromstring(resp.content)
     ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
     
-    # Разделяем sitemap на фильмы и актрис
     movie_sitemaps = {}
     actress_sitemaps = {}
     sitemap_index_data = {}
@@ -1004,7 +891,6 @@ def main():
     
     logger.info(f"Найдено: {len(movie_sitemaps)} movies-sitemap, {len(actress_sitemaps)} idols-sitemap")
     
-    # Загружаем общий кэш
     cache = {}
     if os.path.exists(CACHE_FILE):
         try:
@@ -1045,7 +931,6 @@ def main():
     existing_codes = load_existing_codes(XOR_KEY)
     logger.info(f"В базе: {len(existing_codes)} фильмов")
     
-    # Загружаем существующие фильмы в общий список
     all_films = []
     existing_data = load_encrypted(MOVIES_FILE, XOR_KEY)
     if existing_data:
@@ -1068,7 +953,6 @@ def main():
             processed += 1
             total_parsed += parsed
     
-    # Сохраняем все фильмы в единый файл
     if total_parsed > 0:
         save_all_movies(all_films, XOR_KEY)
     
