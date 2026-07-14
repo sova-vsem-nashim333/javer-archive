@@ -1082,7 +1082,7 @@
     "https://www.javdatabase.com/series-sitemap51.xml": "2026-07-13T16:15:09+00:00"
   },
   "processed": {
-    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-07-13T08:59:35.537810+00:00",
+    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-07-14T07:31:44.406311+00:00",
     "https://www.javdatabase.com/movies-sitemap2.xml": "2026-07-11T15:53:55.375501+00:00",
     "https://www.javdatabase.com/movies-sitemap3.xml": "2026-07-11T15:54:04.823882+00:00",
     "https://www.javdatabase.com/movies-sitemap4.xml": "2026-07-11T15:54:15.621988+00:00",
@@ -1196,7 +1196,7 @@
     "https://www.javdatabase.com/movies-sitemap112.xml": "2026-07-11T16:08:39.755815+00:00"
   },
   "processed_actresses": {
-    "https://www.javdatabase.com/idols/": "2026-07-13T06:32:44.196783+00:00",
+    "https://www.javdatabase.com/idols/": "2026-07-14T07:26:11.585405+00:00",
     "https://www.javdatabase.com/idols/rinon-aoba/": "2026-07-12T14:38:32.975076+00:00",
     "https://www.javdatabase.com/idols/eri-kitami/": "2026-07-12T14:38:32.975079+00:00",
     "https://www.javdatabase.com/idols/minami-renjo/": "2026-07-12T14:38:32.975081+00:00",
@@ -41527,6 +41527,15 @@
     "https://www.javdatabase.com/idols/akari-morimoto/": "2026-07-13T11:45:57.649469+00:00",
     "https://www.javdatabase.com/idols/maki-hoshikawa/": "2026-07-13T11:45:57.649488+00:00",
     "https://www.javdatabase.com/idols/yui-sasaki/": "2026-07-13T11:46:03.587620+00:00",
-    "https://www.javdatabase.com/idols/sara-ogawa/": "2026-07-13T11:46:14.416136+00:00"
+    "https://www.javdatabase.com/idols/sara-ogawa/": "2026-07-13T11:46:14.416136+00:00",
+    "https://www.javdatabase.com/idols/reika-nagasaki/": "2026-07-14T07:26:11.585425+00:00",
+    "https://www.javdatabase.com/idols/yuri-yamada/": "2026-07-14T07:26:11.585430+00:00",
+    "https://www.javdatabase.com/idols/mizuki-nishida/": "2026-07-14T07:26:11.585434+00:00",
+    "https://www.javdatabase.com/idols/chio-mikoto/": "2026-07-14T07:26:11.585438+00:00",
+    "https://www.javdatabase.com/idols/sagiri-izumi/": "2026-07-14T07:26:11.585442+00:00",
+    "https://www.javdatabase.com/idols/haruka-ookoshi/": "2026-07-14T07:26:11.585445+00:00",
+    "https://www.javdatabase.com/idols/ami-hiiragi/": "2026-07-14T07:26:11.585449+00:00",
+    "https://www.javdatabase.com/idols/yua-kaname/": "2026-07-14T07:26:11.585452+00:00",
+    "https://www.javdatabase.com/idols/madoka-hanasaki/": "2026-07-14T07:26:11.585455+00:00"
   }
 }
