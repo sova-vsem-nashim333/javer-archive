@@ -1084,9 +1084,9 @@
     "https://www.javdatabase.com/series-sitemap51.xml": "2026-08-06T02:33:06+00:00"
   },
   "processed": {
-    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-08-05T02:38:40.963199+00:00",
-    "https://www.javdatabase.com/movies-sitemap2.xml": "2026-08-04T10:22:34.233100+00:00",
-    "https://www.javdatabase.com/movies-sitemap3.xml": "2026-07-30T09:41:33.306752+00:00",
+    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-08-06T02:41:22.367845+00:00",
+    "https://www.javdatabase.com/movies-sitemap2.xml": "2026-08-06T02:41:31.048174+00:00",
+    "https://www.javdatabase.com/movies-sitemap3.xml": "2026-08-06T02:42:53.469316+00:00",
     "https://www.javdatabase.com/movies-sitemap4.xml": "2026-07-30T09:41:48.473629+00:00",
     "https://www.javdatabase.com/movies-sitemap5.xml": "2026-07-30T09:41:59.219616+00:00",
     "https://www.javdatabase.com/movies-sitemap6.xml": "2026-07-11T15:54:32.135597+00:00",
@@ -1198,7 +1198,7 @@
     "https://www.javdatabase.com/movies-sitemap112.xml": "2026-07-11T16:08:39.755815+00:00"
   },
   "processed_actresses": {
-    "https://www.javdatabase.com/idols/": "2026-08-04T10:17:08.274994+00:00",
+    "https://www.javdatabase.com/idols/": "2026-08-06T02:38:55.377147+00:00",
     "https://www.javdatabase.com/idols/rinon-aoba/": "2026-07-12T14:38:32.975076+00:00",
     "https://www.javdatabase.com/idols/eri-kitami/": "2026-07-12T14:38:32.975079+00:00",
     "https://www.javdatabase.com/idols/minami-renjo/": "2026-07-12T14:38:32.975081+00:00",
@@ -31150,7 +31150,7 @@
     "https://www.javdatabase.com/idols/minami-nakanishi/": "2026-07-13T06:46:39.413534+00:00",
     "https://www.javdatabase.com/idols/rin-chibana/": "2026-07-13T06:46:39.413536+00:00",
     "https://www.javdatabase.com/idols/emi-kawakita/": "2026-07-13T06:46:39.413538+00:00",
-    "https://www.javdatabase.com/idols/kurumi-shiiki/": "2026-07-13T06:46:39.413539+00:00",
+    "https://www.javdatabase.com/idols/kurumi-shiiki/": "2026-08-06T02:38:55.377181+00:00",
     "https://www.javdatabase.com/idols/rise-amane/": "2026-07-13T06:46:39.413541+00:00",
     "https://www.javdatabase.com/idols/shizuka-utsumi/": "2026-07-13T06:46:39.413543+00:00",
     "https://www.javdatabase.com/idols/yume-sasaki/": "2026-07-13T06:46:39.413544+00:00",
@@ -41631,6 +41631,18 @@
     "https://www.javdatabase.com/idols/kanon-takamiya/": "2026-08-04T10:17:08.275033+00:00",
     "https://www.javdatabase.com/idols/erena-otowa/": "2026-08-04T10:17:08.275035+00:00",
     "https://www.javdatabase.com/idols/tsubasa-watase/": "2026-08-04T10:17:08.275037+00:00",
-    "https://www.javdatabase.com/idols/rino-suzukita/": "2026-08-04T10:17:08.275040+00:00"
+    "https://www.javdatabase.com/idols/rino-suzukita/": "2026-08-04T10:17:08.275040+00:00",
+    "https://www.javdatabase.com/idols/iori-akimoto/": "2026-08-06T02:38:55.377165+00:00",
+    "https://www.javdatabase.com/idols/misano-okae/": "2026-08-06T02:38:55.377170+00:00",
+    "https://www.javdatabase.com/idols/miko-touma/": "2026-08-06T02:38:55.377173+00:00",
+    "https://www.javdatabase.com/idols/keina-yokooki/": "2026-08-06T02:38:55.377176+00:00",
+    "https://www.javdatabase.com/idols/yua-onodera/": "2026-08-06T02:38:55.377179+00:00",
+    "https://www.javdatabase.com/idols/karina-hashitani/": "2026-08-06T02:38:55.377183+00:00",
+    "https://www.javdatabase.com/idols/kazue-kameyama/": "2026-08-06T02:38:55.377185+00:00",
+    "https://www.javdatabase.com/idols/rema-takizawa/": "2026-08-06T02:38:55.377187+00:00",
+    "https://www.javdatabase.com/idols/ria-kusunoki/": "2026-08-06T02:38:55.377191+00:00",
+    "https://www.javdatabase.com/idols/jun-sakuraba/": "2026-08-06T02:38:55.377192+00:00",
+    "https://www.javdatabase.com/idols/chihiro-takaoka/": "2026-08-06T02:38:55.377194+00:00",
+    "https://www.javdatabase.com/idols/akari-moriyama/": "2026-08-06T02:38:55.377196+00:00"
   }
 }
