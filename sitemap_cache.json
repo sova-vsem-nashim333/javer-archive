@@ -1085,7 +1085,7 @@
     "https://www.javdatabase.com/series-sitemap51.xml": "2026-08-10T16:02:59+00:00"
   },
   "processed": {
-    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-08-10T01:55:21.604234+00:00",
+    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-08-11T01:53:42.588030+00:00",
     "https://www.javdatabase.com/movies-sitemap2.xml": "2026-08-07T02:45:46.752399+00:00",
     "https://www.javdatabase.com/movies-sitemap3.xml": "2026-08-07T02:46:39.153105+00:00",
     "https://www.javdatabase.com/movies-sitemap4.xml": "2026-07-30T09:41:48.473629+00:00",
@@ -1199,7 +1199,7 @@
     "https://www.javdatabase.com/movies-sitemap112.xml": "2026-07-11T16:08:39.755815+00:00"
   },
   "processed_actresses": {
-    "https://www.javdatabase.com/idols/": "2026-08-10T01:52:06.244081+00:00",
+    "https://www.javdatabase.com/idols/": "2026-08-11T01:48:41.621889+00:00",
     "https://www.javdatabase.com/idols/rinon-aoba/": "2026-07-12T14:38:32.975076+00:00",
     "https://www.javdatabase.com/idols/eri-kitami/": "2026-07-12T14:38:32.975079+00:00",
     "https://www.javdatabase.com/idols/minami-renjo/": "2026-07-12T14:38:32.975081+00:00",
@@ -41682,6 +41682,11 @@
     "https://www.javdatabase.com/idols/shuri-nojima/": "2026-08-08T01:42:47.234925+00:00",
     "https://www.javdatabase.com/idols/satsuki-niiyama/": "2026-08-08T01:42:47.234929+00:00",
     "https://www.javdatabase.com/idols/kotono/": "2026-08-08T01:42:47.234935+00:00",
-    "https://www.javdatabase.com/idols/mei-tomoe/": "2026-08-10T01:52:06.244102+00:00"
+    "https://www.javdatabase.com/idols/mei-tomoe/": "2026-08-10T01:52:06.244102+00:00",
+    "https://www.javdatabase.com/idols/miu-mirai/": "2026-08-11T01:48:41.621910+00:00",
+    "https://www.javdatabase.com/idols/izuna-inami/": "2026-08-11T01:48:41.621913+00:00",
+    "https://www.javdatabase.com/idols/mone-satomi/": "2026-08-11T01:48:41.621915+00:00",
+    "https://www.javdatabase.com/idols/maya-kanda/": "2026-08-11T01:48:41.621917+00:00",
+    "https://www.javdatabase.com/idols/riri-akise/": "2026-08-11T01:48:41.621920+00:00"
   }
 }
