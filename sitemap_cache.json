@@ -1086,7 +1086,7 @@
     "https://www.javdatabase.com/series-sitemap51.xml": "2026-07-09T15:54:02+00:00"
   },
   "processed": {
-    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-08-18T01:21:28.870874+00:00",
+    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-08-19T01:20:36.547292+00:00",
     "https://www.javdatabase.com/movies-sitemap2.xml": "2026-08-07T02:45:46.752399+00:00",
     "https://www.javdatabase.com/movies-sitemap3.xml": "2026-08-07T02:46:39.153105+00:00",
     "https://www.javdatabase.com/movies-sitemap4.xml": "2026-07-30T09:41:48.473629+00:00",
@@ -1200,7 +1200,7 @@
     "https://www.javdatabase.com/movies-sitemap112.xml": "2026-07-11T16:08:39.755815+00:00"
   },
   "processed_actresses": {
-    "https://www.javdatabase.com/idols/": "2026-08-18T01:16:34.316923+00:00",
+    "https://www.javdatabase.com/idols/": "2026-08-19T01:18:02.096839+00:00",
     "https://www.javdatabase.com/idols/rinon-aoba/": "2026-07-12T14:38:32.975076+00:00",
     "https://www.javdatabase.com/idols/eri-kitami/": "2026-07-12T14:38:32.975079+00:00",
     "https://www.javdatabase.com/idols/minami-renjo/": "2026-07-12T14:38:32.975081+00:00",
@@ -41712,6 +41712,12 @@
     "https://www.javdatabase.com/idols/ayuna-uehara/": "2026-08-18T01:16:34.316968+00:00",
     "https://www.javdatabase.com/idols/yui-shiorina/": "2026-08-18T01:16:34.316972+00:00",
     "https://www.javdatabase.com/idols/koharu-uno/": "2026-08-18T01:16:34.316975+00:00",
-    "https://www.javdatabase.com/idols/koharu-shiraishi/": "2026-08-18T01:16:34.316978+00:00"
+    "https://www.javdatabase.com/idols/koharu-shiraishi/": "2026-08-18T01:16:34.316978+00:00",
+    "https://www.javdatabase.com/idols/mitsuki-amase/": "2026-08-19T01:18:02.096858+00:00",
+    "https://www.javdatabase.com/idols/towa-mikoto/": "2026-08-19T01:18:02.096861+00:00",
+    "https://www.javdatabase.com/idols/ryo-takamiya/": "2026-08-19T01:18:02.096864+00:00",
+    "https://www.javdatabase.com/idols/shizue-miyakawa/": "2026-08-19T01:18:02.096867+00:00",
+    "https://www.javdatabase.com/idols/mina-yoshii/": "2026-08-19T01:18:02.096869+00:00",
+    "https://www.javdatabase.com/idols/ami-momomiya/": "2026-08-19T01:18:02.096872+00:00"
   }
 }
