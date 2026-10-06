@@ -1090,7 +1090,7 @@
     "https://www.javdatabase.com/series-sitemap52.xml": "2026-10-02T15:40:22+00:00"
   },
   "processed": {
-    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-10-05T04:34:08.154178+00:00",
+    "https://www.javdatabase.com/movies-sitemap1.xml": "2026-10-06T05:23:18.978029+00:00",
     "https://www.javdatabase.com/movies-sitemap2.xml": "2026-10-02T04:32:04.457356+00:00",
     "https://www.javdatabase.com/movies-sitemap3.xml": "2026-10-02T04:32:41.454512+00:00",
     "https://www.javdatabase.com/movies-sitemap4.xml": "2026-09-18T03:40:05.252921+00:00",
@@ -1204,7 +1204,7 @@
     "https://www.javdatabase.com/movies-sitemap112.xml": "2026-07-11T16:08:39.755815+00:00"
   },
   "processed_actresses": {
-    "https://www.javdatabase.com/idols/": "2026-10-05T04:31:19.813618+00:00",
+    "https://www.javdatabase.com/idols/": "2026-10-06T05:17:40.559008+00:00",
     "https://www.javdatabase.com/idols/rinon-aoba/": "2026-07-12T14:38:32.975076+00:00",
     "https://www.javdatabase.com/idols/eri-kitami/": "2026-07-12T14:38:32.975079+00:00",
     "https://www.javdatabase.com/idols/minami-renjo/": "2026-07-12T14:38:32.975081+00:00",
@@ -41839,6 +41839,13 @@
     "https://www.javdatabase.com/idols/nao-henmi/": "2026-10-02T04:28:50.366857+00:00",
     "https://www.javdatabase.com/idols/chiyuki-makimoto/": "2026-10-05T04:31:19.813639+00:00",
     "https://www.javdatabase.com/idols/sayaka-takamine/": "2026-10-05T04:31:19.813645+00:00",
-    "https://www.javdatabase.com/idols/kaori-mihama/": "2026-10-05T04:31:19.813650+00:00"
+    "https://www.javdatabase.com/idols/kaori-mihama/": "2026-10-05T04:31:19.813650+00:00",
+    "https://www.javdatabase.com/idols/ena-kawahiro/": "2026-10-06T05:17:40.559024+00:00",
+    "https://www.javdatabase.com/idols/aoi-shiratani/": "2026-10-06T05:17:40.559027+00:00",
+    "https://www.javdatabase.com/idols/nagisa-aoi/": "2026-10-06T05:17:40.559030+00:00",
+    "https://www.javdatabase.com/idols/reina-ohara/": "2026-10-06T05:17:40.559033+00:00",
+    "https://www.javdatabase.com/idols/natsume-imai/": "2026-10-06T05:17:40.559035+00:00",
+    "https://www.javdatabase.com/idols/saku-sano/": "2026-10-06T05:17:40.559036+00:00",
+    "https://www.javdatabase.com/idols/rino-hoshimura/": "2026-10-06T05:17:40.559039+00:00"
   }
 }
